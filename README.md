@@ -47,6 +47,17 @@ TQQQ, SOXL 등 변동성이 큰 레버리지 ETF의 과거 데이터를 분석�
    - 예: 3% 하락 시 30% 매수, 7% 하락 시 70% 매수
    - 매도도 단계별로 설정 가능
 
+7. **일일 누적 매수 + 회차별 익절** (DailyAccumulationStrategy) ⭐ NEW
+   - 매일 종가 기준 하락 시 누적 매수 (최대 30회)
+   - 상승 시 각 매수 회차별로 3% 이상 수익난 것만 개별 매도
+   - 하락장에서 평균단가 낮추기 + 상승장에서 단계적 익절
+   - 레버리지 ETF의 급락/급등에 최적화
+
+8. **간소화 일일 DCA** (DailyDCAStrategy)
+   - 전일 종가보다 낮으면 매수 (최대 30회)
+   - 평균 매수가 대비 3% 이상 수익 시 전량 매도
+   - 더 단순하고 직관적인 버전
+
 ### 📈 기술적 지표 기반 전략 (레거시)
 
 <details>
@@ -206,10 +217,48 @@ strategy = CombinedPercentageStrategy(
 )
 ```
 
+### ⭐ 일일 누적 매수 + 회차별 익절 (NEW!)
+
+```python
+from src.strategies.percentage_strategy import DailyAccumulationStrategy
+
+# 매일 종가 기준 하락 시 누적 매수, 상승 시 수익난 회차만 익절
+strategy = DailyAccumulationStrategy(
+    max_positions=30,         # 최대 30회까지 매수
+    profit_target_percent=3.0  # 각 회차별 3% 익절
+)
+
+# 동작 방식:
+# - 1일차: 무조건 1회 매수
+# - 2일차: 전일 종가 < 당일 종가 → 2회 매수
+# - 3일차: 전일 종가 > 당일 종가 → 3% 이상 수익난 회차만 매도
+# - 반복...
+```
+
+### 🔄 간소화 DCA 전략
+
+```python
+from src.strategies.percentage_strategy import DailyDCAStrategy
+
+# 평균 매수가 기준 전체 익절 (더 단순한 버전)
+strategy = DailyDCAStrategy(
+    max_positions=30,
+    profit_target_percent=3.0,
+    first_day_buy=True  # 첫날 무조건 매수
+)
+
+# 동작 방식:
+# - 전일 종가보다 낮으면 매수
+# - 평균 매수가 대비 3% 이상 수익 시 전량 매도
+```
+
 ### 예제 스크립트 실행
 
 ```bash
 cd examples
+
+# ⭐ 일일 누적 매수 전략 테스트 (NEW!)
+python daily_accumulation_test.py
 
 # ⭐ 퍼센트 전략 종합 테스트 (추천)
 python percentage_strategy_example.py
