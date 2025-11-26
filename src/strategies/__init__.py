@@ -9,7 +9,8 @@ from .percentage_strategy import (
     GridTradingStrategy,
     DollarCostAveragingStrategy,
     VolatilityBreakoutStrategy,
-    CombinedPercentageStrategy
+    CombinedPercentageStrategy,
+    DailyDCAStrategy
 )
 
 # 기술적 지표 기반 전략 (레거시)
@@ -27,6 +28,7 @@ __all__ = [
     'DollarCostAveragingStrategy',
     'VolatilityBreakoutStrategy',
     'CombinedPercentageStrategy',
+    'DailyDCAStrategy',
     # 기술적 지표 기반 전략
     'MomentumStrategy',
     'MeanReversionStrategy',

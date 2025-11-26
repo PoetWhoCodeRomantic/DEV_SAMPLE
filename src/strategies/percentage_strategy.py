@@ -410,3 +410,128 @@ class CombinedPercentageStrategy(BaseStrategy):
             df.loc[mask, 'Position_Size'] = sell_size
 
         return df
+
+
+class DailyDCAStrategy(BaseStrategy):
+    """
+    일일 DCA + 회차별 익절 + 트레일링 매수 전략
+
+    매수 조건 (둘 중 하나 만족):
+      1. 전일 종가보다 낮을 때
+      2. 최근 N일 최고가 대비 M% 이상 하락했을 때
+
+    매도: 각 회차별로 3% 이상 수익난 포지션만 개별 매도
+    """
+
+    def __init__(
+        self,
+        max_positions: int = 30,
+        profit_target_percent: float = 3.0,
+        first_day_buy: bool = True,
+        lookback_days: int = 7,
+        pullback_percent: float = 3.0
+    ):
+        """
+        DailyDCAStrategy 초기화
+
+        Args:
+            max_positions: 최대 매수 회차
+            profit_target_percent: 익절 기준 (%)
+            first_day_buy: 첫날 무조건 매수 여부
+            lookback_days: 최근 고점 추적 기간 (일)
+            pullback_percent: 고점 대비 하락률 매수 기준 (%)
+        """
+        super().__init__(name=f"DailyDCA({max_positions}회)")
+        self.max_positions = max_positions
+        self.profit_target_percent = profit_target_percent
+        self.first_day_buy = first_day_buy
+        self.lookback_days = lookback_days
+        self.pullback_percent = pullback_percent
+
+    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        일일 DCA 시그널 생성 (회차별 개별 익절 + 트레일링 매수)
+
+        Args:
+            data: OHLCV 데이터프레임
+
+        Returns:
+            DataFrame: 시그널이 추가된 데이터프레임
+        """
+        df = data.copy()
+
+        # 전일 종가
+        df['Prev_Close'] = df['Close'].shift(1)
+
+        # 최근 N일 최고가 (트레일링 매수용)
+        df['Recent_High'] = df['Close'].rolling(window=self.lookback_days, min_periods=1).max()
+
+        # 시그널 초기화
+        df['Signal'] = 0
+        df['Position_Count'] = 0
+        df['Sell_Count'] = 0  # 매도한 회차 수
+        df['Buy_Condition'] = ''  # 매수 조건 추적 (디버깅용)
+
+        # 상태 추적: 각 회차별 매수가 리스트
+        buy_prices = []
+
+        for idx in df.index:
+            current_close = df.loc[idx, 'Close']
+            prev_close = df.loc[idx, 'Prev_Close']
+            recent_high = df.loc[idx, 'Recent_High']
+
+            sell_count = 0
+
+            # 첫날 처리
+            if pd.isna(prev_close):
+                if self.first_day_buy:
+                    df.loc[idx, 'Signal'] = 1
+                    df.loc[idx, 'Buy_Condition'] = 'First_Day'
+                    buy_prices.append(current_close)
+            else:
+                # 매수 조건 체크
+                should_buy = False
+                buy_reason = ''
+
+                # 조건 1: 전일 종가보다 하락
+                if current_close < prev_close:
+                    should_buy = True
+                    buy_reason = 'Daily_Drop'
+
+                # 조건 2: 최근 고점 대비 일정 % 하락 (상승장 대응)
+                if not pd.isna(recent_high) and recent_high > 0:
+                    drop_from_high = ((recent_high - current_close) / recent_high) * 100
+                    if drop_from_high >= self.pullback_percent:
+                        should_buy = True
+                        buy_reason = f'Pullback_{drop_from_high:.1f}%'
+
+                # 매수 실행
+                if should_buy and len(buy_prices) < self.max_positions:
+                    df.loc[idx, 'Signal'] = 1
+                    df.loc[idx, 'Buy_Condition'] = buy_reason
+                    buy_prices.append(current_close)
+
+                # 매도 조건: 전일보다 상승 + 수익난 회차 있음
+                elif current_close > prev_close and len(buy_prices) > 0:
+                    # 상승: 회차별 익절 체크
+                    remaining_prices = []
+
+                    for buy_price in buy_prices:
+                        profit_pct = ((current_close - buy_price) / buy_price) * 100
+
+                        if profit_pct >= self.profit_target_percent:
+                            # 이 회차는 매도
+                            sell_count += 1
+                        else:
+                            # 이 회차는 유지
+                            remaining_prices.append(buy_price)
+
+                    if sell_count > 0:
+                        df.loc[idx, 'Signal'] = -1
+                        df.loc[idx, 'Sell_Count'] = sell_count
+                        buy_prices = remaining_prices
+
+            # 현재 상태 기록
+            df.loc[idx, 'Position_Count'] = len(buy_prices)
+
+        return df
