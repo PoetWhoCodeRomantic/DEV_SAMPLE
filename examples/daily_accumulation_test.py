@@ -34,8 +34,10 @@ def test_daily_accumulation():
 
     # 전략 설정
     strategy = DailyDCAStrategy(
-        max_positions=30,        # 최대 30회 매수
-        profit_target_percent=3.0  # 3% 익절
+        max_positions=30,           # 최대 30회 매수
+        profit_target_percent=3.0,  # 3% 익절
+        lookback_days=7,            # 최근 7일 고점 추적
+        pullback_percent=3.0        # 고점 대비 3% 하락 시 매수
     )
 
     # 백테스트 실행
@@ -72,7 +74,7 @@ def test_daily_accumulation():
 def test_parameter_comparison():
     """파라미터별 성과 비교"""
     print("=" * 80)
-    print("[ 파라미터 비교 ] 최대 매수 회차에 따른 성과")
+    print("[ 파라미터 비교 ] 트레일링 매수 설정에 따른 성과")
     print("=" * 80)
     print()
 
@@ -80,42 +82,62 @@ def test_parameter_comparison():
     fetcher = DataFetcher()
     data = fetcher.fetch_data('TQQQ', period='1y')
 
-    # 다양한 max_positions 테스트
-    test_params = [10, 20, 30, 50]
+    # 다양한 트레일링 매수 설정 테스트
+    test_configs = [
+        {'lookback': 5, 'pullback': 2.0, 'name': '공격적(5일/2%)'},
+        {'lookback': 7, 'pullback': 3.0, 'name': '균형(7일/3%)'},
+        {'lookback': 10, 'pullback': 5.0, 'name': '보수적(10일/5%)'},
+        {'lookback': 0, 'pullback': 999.0, 'name': '트레일링 OFF'},  # 사실상 전일 대비만
+    ]
     results_summary = []
 
-    for max_pos in test_params:
-        print(f"테스트 중: 최대 {max_pos}회 매수...")
+    for config in test_configs:
+        print(f"테스트 중: {config['name']}...")
 
         strategy = DailyDCAStrategy(
-            max_positions=max_pos,
-            profit_target_percent=3.0
+            max_positions=30,
+            profit_target_percent=3.0,
+            lookback_days=config['lookback'],
+            pullback_percent=config['pullback']
         )
 
         backtester = Backtester(initial_capital=10000)
-        backtester.run(strategy, data)
+        test_results = backtester.run(strategy, data)
         metrics = backtester.calculate_metrics()
 
+        # 매수 조건별 통계
+        buy_signals = test_results[test_results['Signal'] == 1]
+        daily_drop_count = len(buy_signals[buy_signals['Buy_Condition'] == 'Daily_Drop'])
+        pullback_count = len(buy_signals[buy_signals['Buy_Condition'].str.contains('Pullback', na=False)])
+
         results_summary.append({
-            'Max Positions': max_pos,
+            'Config': config['name'],
             'Total Return (%)': metrics['Total Return (%)'],
             'Sharpe Ratio': metrics['Sharpe Ratio'],
             'Max Drawdown (%)': metrics['Max Drawdown (%)'],
-            'Win Rate (%)': metrics['Win Rate (%)']
+            'Win Rate (%)': metrics['Win Rate (%)'],
+            'Daily Drop Buys': daily_drop_count,
+            'Pullback Buys': pullback_count
         })
 
     # 결과 출력
     print()
-    print(f"{'최대회차':>10} {'수익률':>12} {'샤프비율':>12} {'최대낙폭':>12} {'승률':>10}")
-    print("-" * 80)
+    print(f"{'설정':>20} {'수익률':>10} {'샤프':>8} {'낙폭':>10} {'승률':>8} {'전일↓':>8} {'고점↓':>8}")
+    print("-" * 90)
 
     for result in results_summary:
-        print(f"{result['Max Positions']:>10} "
-              f"{result['Total Return (%)']:>11.2f}% "
-              f"{result['Sharpe Ratio']:>12.2f} "
-              f"{result['Max Drawdown (%)']:>11.2f}% "
-              f"{result['Win Rate (%)']:>9.1f}%")
+        print(f"{result['Config']:>20} "
+              f"{result['Total Return (%)']:>9.2f}% "
+              f"{result['Sharpe Ratio']:>8.2f} "
+              f"{result['Max Drawdown (%)']:>9.2f}% "
+              f"{result['Win Rate (%)']:>7.1f}% "
+              f"{result['Daily Drop Buys']:>8}회 "
+              f"{result['Pullback Buys']:>7}회")
 
+    print()
+    print("💡 해석:")
+    print("  - '전일↓': 전일 종가보다 하락해서 매수한 횟수")
+    print("  - '고점↓': 최근 고점 대비 하락해서 매수한 횟수 (상승장 대응)")
     print()
 
 
