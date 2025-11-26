@@ -1,6 +1,13 @@
 # 레버리지 ETF 퀀트 트레이딩 시뮬레이션
 
-TQQQ, SOXL 등 변동성이 큰 레버리지 ETF의 과거 데이터를 분석하고, 효율적인 퀀트 트레이딩 전략을 시뮬레이션하고 검증하는 프로그램입니다.
+TQQQ, SOXL 등 변동성이 큰 레버리지 ETF의 과거 데이터를 분석하고, **퍼센트 기반의 실용적인 트레이딩 전략**을 시뮬레이션하고 검증하는 프로그램입니다.
+
+## 💡 핵심 특징
+
+복잡한 기술적 지표 대신, **가격 변동률(%)을 기반으로 한 명확하고 단순한 매매 전략**을 제공합니다.
+- "N% 하락 시 매수, M% 상승 시 매도"와 같은 직관적인 조건
+- 하락폭에 따른 비중 조절 (피라미딩)
+- 레버리지 ETF의 높은 변동성에 최적화된 전략
 
 ## 주요 기능
 
@@ -9,29 +16,54 @@ TQQQ, SOXL 등 변동성이 큰 레버리지 ETF의 과거 데이터를 분석�
 - TQQQ, SOXL, UPRO, TNA, FNGU 등 주요 3배 레버리지 ETF 지원
 - 다양한 기간 및 인터벌 설정 가능
 
-### 📈 기술적 지표
-- **이동평균**: SMA, EMA
-- **모멘텀 지표**: RSI, MACD, Stochastic, ADX
-- **변동성 지표**: Bollinger Bands, ATR
-- **거래량 지표**: OBV, VWAP
+### 🎯 퍼센트 기반 트레이딩 전략 (주요 전략)
 
-### 🎯 트레이딩 전략
-1. **모멘텀 전략**
-   - 이동평균선 크로스오버
-   - 골든/데드 크로스 기반 매매
+1. **하락률 매수 전략** (PercentageDropBuyStrategy)
+   - N% 하락 시 매수
+   - M% 상승 시 매도
+   - 예: 5% 하락 시 매수, 3% 상승 시 매도
 
-2. **평균 회귀 전략**
-   - 볼린저 밴드 기반
-   - Z-Score 기반
+2. **피라미딩 전략** (PyramidingStrategy)
+   - 하락폭에 따라 매수 비중 증가
+   - 예: 3% 하락 → 20% 투자, 5% 하락 → 30% 투자, 10% 하락 → 50% 투자
+   - 목표 수익률 도달 시 전량 매도
 
-3. **RSI 전략**
-   - 과매수/과매도 구간 매매
-   - RSI 다이버전스 전략
+3. **그리드 트레이딩** (GridTradingStrategy)
+   - 일정 간격(%)으로 매수/매도 주문 배치
+   - 예: 3% 간격으로 10개 그리드 설정
+   - 변동성 장세에서 효과적
 
-4. **MACD 전략**
-   - MACD 크로스오버
-   - 히스토그램 전략
-   - 제로선 크로스
+4. **정액 적립식 투자** (DollarCostAveragingStrategy)
+   - 일정 기간마다 자동 매수
+   - 목표 수익률 도달 시 매도
+   - 장기 투자에 적합
+
+5. **변동성 돌파 전략** (VolatilityBreakoutStrategy)
+   - 전일 변동폭의 N% 돌파 시 매수
+   - 손절/익절 기준 설정 가능
+
+6. **복합 퍼센트 전략** (CombinedPercentageStrategy)
+   - 여러 하락/상승 구간에서 각각 다른 비중으로 매매
+   - 예: 3% 하락 시 30% 매수, 7% 하락 시 70% 매수
+   - 매도도 단계별로 설정 가능
+
+### 📈 기술적 지표 기반 전략 (레거시)
+
+<details>
+<summary>클릭하여 펼치기</summary>
+
+- **모멘텀 전략**: 이동평균선 크로스오버
+- **평균 회귀 전략**: 볼린저 밴드, Z-Score
+- **RSI 전략**: 과매수/과매도
+- **MACD 전략**: 크로스오버
+
+기술적 지표 계산 유틸리티:
+- 이동평균: SMA, EMA
+- 모멘텀: RSI, MACD, Stochastic, ADX
+- 변동성: Bollinger Bands, ATR
+- 거래량: OBV, VWAP
+
+</details>
 
 ### 🔬 백테스팅 엔진
 - 실제 거래 비용 (수수료, 슬리피지) 반영
@@ -64,22 +96,25 @@ TQQQ, SOXL 등 변동성이 큰 레버리지 ETF의 과거 데이터를 분석�
 │   ├── strategies/
 │   │   ├── __init__.py
 │   │   ├── base_strategy.py         # 기본 전략 클래스
-│   │   ├── momentum_strategy.py     # 모멘텀 전략
-│   │   ├── mean_reversion_strategy.py  # 평균 회귀 전략
-│   │   ├── rsi_strategy.py          # RSI 전략
-│   │   └── macd_strategy.py         # MACD 전략
+│   │   ├── percentage_strategy.py   # ⭐ 퍼센트 기반 전략 (주요)
+│   │   ├── momentum_strategy.py     # 모멘텀 전략 (레거시)
+│   │   ├── mean_reversion_strategy.py  # 평균 회귀 전략 (레거시)
+│   │   ├── rsi_strategy.py          # RSI 전략 (레거시)
+│   │   └── macd_strategy.py         # MACD 전략 (레거시)
 │   ├── backtesting/
 │   │   ├── __init__.py
 │   │   ├── backtester.py            # 백테스팅 엔진
 │   │   └── performance.py           # 성과 분석
 │   └── utils/
 │       ├── __init__.py
-│       ├── indicators.py            # 기술적 지표
+│       ├── indicators.py            # 기술적 지표 (레거시)
 │       └── visualization.py         # 시각화
 ├── examples/
-│   ├── basic_example.py             # 기본 사용 예제
-│   ├── strategy_comparison.py       # 전략 비교
-│   └── parameter_optimization.py    # 파라미터 최적화
+│   ├── percentage_strategy_example.py   # ⭐ 퍼센트 전략 예제 (추천)
+│   ├── custom_percentage_test.py        # ⭐ 커스텀 조건 테스트 (추천)
+│   ├── basic_example.py                 # 기본 예제
+│   ├── strategy_comparison.py           # 전략 비교
+│   └── parameter_optimization.py        # 파라미터 최적화
 ├── tests/
 ├── requirements.txt
 └── README.md
@@ -111,19 +146,22 @@ pip install -r requirements.txt
 
 ## 사용 방법
 
-### 기본 예제
+### ⭐ 퍼센트 기반 전략 예제 (추천)
 
 ```python
 from src.data.data_fetcher import DataFetcher
-from src.strategies.momentum_strategy import MomentumStrategy
+from src.strategies.percentage_strategy import PercentageDropBuyStrategy
 from src.backtesting.backtester import Backtester
 
 # 1. 데이터 수집
 fetcher = DataFetcher()
 data = fetcher.fetch_data('TQQQ', period='2y')
 
-# 2. 전략 설정
-strategy = MomentumStrategy(short_window=20, long_window=50)
+# 2. 전략 설정: 5% 하락 시 매수, 3% 상승 시 매도
+strategy = PercentageDropBuyStrategy(
+    drop_percent=5.0,      # 5% 하락 시 매수
+    sell_profit_percent=3.0  # 3% 상승 시 매도
+)
 
 # 3. 백테스트 실행
 backtester = Backtester(initial_capital=10000)
@@ -133,11 +171,53 @@ results = backtester.run(strategy, data)
 backtester.print_summary()
 ```
 
+### 💰 피라미딩 전략 (하락 시 비중 늘리기)
+
+```python
+from src.strategies.percentage_strategy import PyramidingStrategy
+
+# 하락폭에 따라 단계적으로 비중 증가
+strategy = PyramidingStrategy(
+    buy_levels=[
+        (3.0, 0.2),   # 3% 하락 → 20% 투자
+        (5.0, 0.3),   # 5% 하락 → 30% 투자
+        (8.0, 0.3),   # 8% 하락 → 30% 투자
+        (12.0, 0.2)   # 12% 하락 → 20% 투자
+    ],
+    sell_profit_percent=5.0  # 5% 수익 시 전량 매도
+)
+```
+
+### 📊 복합 전략 (매수/매도 단계별 조절)
+
+```python
+from src.strategies.percentage_strategy import CombinedPercentageStrategy
+
+strategy = CombinedPercentageStrategy(
+    buy_conditions=[
+        (5.0, 0.4),    # 5% 하락 → 40% 매수
+        (10.0, 0.6),   # 10% 하락 → 60% 매수
+        (15.0, 1.0)    # 15% 하락 → 100% 매수
+    ],
+    sell_conditions=[
+        (8.0, 0.5),    # 8% 상승 → 50% 매도
+        (15.0, 1.0)    # 15% 상승 → 100% 매도
+    ]
+)
+```
+
 ### 예제 스크립트 실행
 
 ```bash
-# 기본 예제 실행
 cd examples
+
+# ⭐ 퍼센트 전략 종합 테스트 (추천)
+python percentage_strategy_example.py
+
+# ⭐ 커스텀 조건으로 테스트 (추천)
+python custom_percentage_test.py
+
+# 기본 예제
 python basic_example.py
 
 # 여러 전략 비교
@@ -164,23 +244,78 @@ python parameter_optimization.py
 
 ## 커스텀 전략 만들기
 
+### 퍼센트 기반 커스텀 전략
+
 ```python
 from src.strategies.base_strategy import BaseStrategy
 import pandas as pd
 
-class MyCustomStrategy(BaseStrategy):
-    def __init__(self, param1, param2):
-        super().__init__(name="MyCustomStrategy")
-        self.param1 = param1
-        self.param2 = param2
+class MyPercentageStrategy(BaseStrategy):
+    """
+    나만의 퍼센트 전략
+    예: 연속 2일 하락 후 추가 3% 하락 시 매수
+    """
+    def __init__(self, drop_threshold=3.0):
+        super().__init__(name="MyPercentageStrategy")
+        self.drop_threshold = drop_threshold
 
     def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
         df = data.copy()
 
-        # 여기에 시그널 생성 로직 구현
-        # df['Signal'] = 1 (매수), -1 (매도), 0 (관망)
+        # 일일 변동률 계산
+        df['Daily_Change'] = df['Close'].pct_change() * 100
+
+        # 2일 연속 하락 확인
+        df['Consecutive_Drop'] = (
+            (df['Daily_Change'] < 0) &
+            (df['Daily_Change'].shift(1) < 0)
+        )
+
+        # 시그널 생성
+        df['Signal'] = 0
+
+        # 연속 하락 후 threshold 이상 하락 시 매수
+        buy_condition = (
+            df['Consecutive_Drop'] &
+            (df['Daily_Change'] <= -self.drop_threshold)
+        )
+        df.loc[buy_condition, 'Signal'] = 1
+
+        # 5% 수익 시 매도
+        df['Returns_From_Entry'] = (df['Close'] / df['Close'].shift(1) - 1) * 100
+        df.loc[df['Returns_From_Entry'] >= 5.0, 'Signal'] = -1
 
         return df
+```
+
+### 실전 예제: 나만의 조건 설정
+
+```python
+# 예제 1: 급락 구간 물타기 전략
+from src.strategies.percentage_strategy import PyramidingStrategy
+
+my_strategy = PyramidingStrategy(
+    buy_levels=[
+        (5.0, 0.25),    # 5% 하락 → 자본의 25% 투자
+        (10.0, 0.35),   # 10% 하락 → 추가 35% 투자
+        (15.0, 0.40),   # 15% 하락 → 추가 40% 투자 (총 100%)
+    ],
+    sell_profit_percent=7.0  # 7% 수익 시 전량 매도
+)
+
+# 예제 2: 보수적 전략
+from src.strategies.percentage_strategy import PercentageDropBuyStrategy
+
+conservative_strategy = PercentageDropBuyStrategy(
+    drop_percent=10.0,       # 큰 폭 하락 시에만 매수
+    sell_profit_percent=5.0  # 작은 수익에도 매도
+)
+
+# 예제 3: 공격적 전략
+aggressive_strategy = PercentageDropBuyStrategy(
+    drop_percent=3.0,        # 작은 하락에도 매수
+    sell_profit_percent=10.0 # 큰 수익 노리기
+)
 ```
 
 ## 성과 지표
