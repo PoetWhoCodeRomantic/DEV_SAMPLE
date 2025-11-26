@@ -10,7 +10,6 @@ from .percentage_strategy import (
     DollarCostAveragingStrategy,
     VolatilityBreakoutStrategy,
     CombinedPercentageStrategy,
-    DailyAccumulationStrategy,
     DailyDCAStrategy
 )
 
@@ -29,7 +28,6 @@ __all__ = [
     'DollarCostAveragingStrategy',
     'VolatilityBreakoutStrategy',
     'CombinedPercentageStrategy',
-    'DailyAccumulationStrategy',
     'DailyDCAStrategy',
     # 기술적 지표 기반 전략
     'MomentumStrategy',

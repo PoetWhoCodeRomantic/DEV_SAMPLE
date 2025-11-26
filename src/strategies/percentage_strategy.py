@@ -412,114 +412,12 @@ class CombinedPercentageStrategy(BaseStrategy):
         return df
 
 
-class DailyAccumulationStrategy(BaseStrategy):
-    """
-    일일 누적 매수 + 회차별 익절 전략
-
-    매수 규칙:
-    - 매일 종가에 매수 (최대 30회)
-    - 1일차: 무조건 1회 매수
-    - 2일차 이후: 당일 종가가 전일 종가보다 낮으면 추가 매수
-
-    매도 규칙:
-    - 당일 종가가 전일 종가보다 높을 때
-    - 각 매수 회차별로 3% 이상 수익이 난 회차만 매도
-    """
-
-    def __init__(
-        self,
-        max_positions: int = 30,
-        profit_target_percent: float = 3.0
-    ):
-        """
-        DailyAccumulationStrategy 초기화
-
-        Args:
-            max_positions: 최대 매수 회차 (기본값: 30)
-            profit_target_percent: 익절 기준 수익률 (기본값: 3%)
-        """
-        super().__init__(name=f"DailyAccumulation(max={max_positions})")
-        self.max_positions = max_positions
-        self.profit_target_percent = profit_target_percent
-
-    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
-        """
-        일일 누적 매수 시그널 생성
-
-        Args:
-            data: OHLCV 데이터프레임
-
-        Returns:
-            DataFrame: 시그널이 추가된 데이터프레임
-        """
-        df = data.copy()
-
-        # 시그널 및 매매 정보 초기화
-        df['Signal'] = 0
-        df['Buy_Count'] = 0  # 현재까지 누적 매수 회차
-        df['Sell_Count'] = 0  # 당일 매도 회차
-        df['Avg_Buy_Price'] = 0.0  # 평균 매수가
-        df['Total_Positions'] = 0  # 보유 포지션 수
-
-        # 각 매수 회차별 매수가 저장 (최대 30개)
-        buy_prices = []  # [(날짜, 매수가), ...]
-
-        prev_close = None
-
-        for idx in df.index:
-            current_close = df.loc[idx, 'Close']
-
-            # 첫날 또는 이전 종가보다 낮을 때 매수
-            if prev_close is None:
-                # 첫날: 무조건 매수
-                if len(buy_prices) < self.max_positions:
-                    df.loc[idx, 'Signal'] = 1
-                    df.loc[idx, 'Buy_Count'] = 1
-                    buy_prices.append((idx, current_close))
-            else:
-                # 현재 종가 vs 전일 종가 비교
-                if current_close < prev_close:
-                    # 하락: 추가 매수
-                    if len(buy_prices) < self.max_positions:
-                        df.loc[idx, 'Signal'] = 1
-                        df.loc[idx, 'Buy_Count'] = len(buy_prices) + 1
-                        buy_prices.append((idx, current_close))
-                elif current_close > prev_close:
-                    # 상승: 수익 난 회차 매도 체크
-                    sell_count = 0
-                    positions_to_remove = []
-
-                    for i, (buy_date, buy_price) in enumerate(buy_prices):
-                        profit_pct = ((current_close - buy_price) / buy_price) * 100
-
-                        if profit_pct >= self.profit_target_percent:
-                            sell_count += 1
-                            positions_to_remove.append(i)
-
-                    if sell_count > 0:
-                        df.loc[idx, 'Signal'] = -1
-                        df.loc[idx, 'Sell_Count'] = sell_count
-
-                        # 매도한 포지션 제거 (역순으로 제거)
-                        for i in sorted(positions_to_remove, reverse=True):
-                            buy_prices.pop(i)
-
-            # 현재 보유 포지션 및 평균 매수가 기록
-            df.loc[idx, 'Total_Positions'] = len(buy_prices)
-            if len(buy_prices) > 0:
-                df.loc[idx, 'Avg_Buy_Price'] = sum(price for _, price in buy_prices) / len(buy_prices)
-
-            prev_close = current_close
-
-        return df
-
-
 class DailyDCAStrategy(BaseStrategy):
     """
-    간소화된 일일 DCA + 익절 전략
+    일일 DCA + 회차별 익절 전략
 
     매수: 매일 종가가 전일 종가보다 낮으면 매수 (최대 30회)
-    매도: 평균 매수가 대비 3% 이상 수익 시 전량 매도
+    매도: 각 회차별로 3% 이상 수익난 포지션만 개별 매도
     """
 
     def __init__(
@@ -543,7 +441,7 @@ class DailyDCAStrategy(BaseStrategy):
 
     def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
         """
-        일일 DCA 시그널 생성
+        일일 DCA 시그널 생성 (회차별 개별 익절)
 
         Args:
             data: OHLCV 데이터프레임
@@ -559,46 +457,49 @@ class DailyDCAStrategy(BaseStrategy):
         # 시그널 초기화
         df['Signal'] = 0
         df['Position_Count'] = 0
-        df['Avg_Price'] = 0.0
+        df['Sell_Count'] = 0  # 매도한 회차 수
 
-        # 상태 추적
-        position_count = 0
-        total_cost = 0.0
-        avg_price = 0.0
+        # 상태 추적: 각 회차별 매수가 리스트
+        buy_prices = []
 
         for idx in df.index:
             current_close = df.loc[idx, 'Close']
             prev_close = df.loc[idx, 'Prev_Close']
 
+            sell_count = 0
+
             # 첫날 처리
             if pd.isna(prev_close):
                 if self.first_day_buy:
                     df.loc[idx, 'Signal'] = 1
-                    position_count = 1
-                    total_cost = current_close
-                    avg_price = current_close
+                    buy_prices.append(current_close)
             else:
                 # 현재가 vs 전일 종가
-                if current_close < prev_close and position_count < self.max_positions:
+                if current_close < prev_close and len(buy_prices) < self.max_positions:
                     # 하락: 매수
                     df.loc[idx, 'Signal'] = 1
-                    position_count += 1
-                    total_cost += current_close
-                    avg_price = total_cost / position_count
+                    buy_prices.append(current_close)
 
-                elif current_close > prev_close and position_count > 0:
-                    # 상승: 익절 체크
-                    profit_pct = ((current_close - avg_price) / avg_price) * 100
+                elif current_close > prev_close and len(buy_prices) > 0:
+                    # 상승: 회차별 익절 체크
+                    remaining_prices = []
 
-                    if profit_pct >= self.profit_target_percent:
-                        # 전량 매도
+                    for buy_price in buy_prices:
+                        profit_pct = ((current_close - buy_price) / buy_price) * 100
+
+                        if profit_pct >= self.profit_target_percent:
+                            # 이 회차는 매도
+                            sell_count += 1
+                        else:
+                            # 이 회차는 유지
+                            remaining_prices.append(buy_price)
+
+                    if sell_count > 0:
                         df.loc[idx, 'Signal'] = -1
-                        position_count = 0
-                        total_cost = 0.0
-                        avg_price = 0.0
+                        df.loc[idx, 'Sell_Count'] = sell_count
+                        buy_prices = remaining_prices
 
             # 현재 상태 기록
-            df.loc[idx, 'Position_Count'] = position_count
-            df.loc[idx, 'Avg_Price'] = avg_price
+            df.loc[idx, 'Position_Count'] = len(buy_prices)
 
         return df
