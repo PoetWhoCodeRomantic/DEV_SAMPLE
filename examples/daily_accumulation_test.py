@@ -20,9 +20,9 @@ def test_daily_accumulation():
     print("전략 설명:")
     print("  1. 매일 종가 체크")
     print("  2. 첫날 무조건 1회 매수")
-    print("  3. 전일 종가보다 낮으면 추가 매수 (최대 30회)")
+    print("  3. 전일 종가보다 낮으면 추가 매수 (최대 10회)")
     print("  4. 전일 종가보다 높으면 각 회차별로 3% 이상 수익난 것만 매도")
-    print("  5. ⭐ 하락 깊이에 따라 매수 수량 자동 증가 (5%마다 2배, 3배...)")
+    print("  5. ⭐ 평균 매수가 대비 하락 깊이에 따라 매수 수량 자동 증가")
     print()
 
     # 데이터 수집
@@ -35,13 +35,13 @@ def test_daily_accumulation():
 
     # 전략 설정 (포지션 스케일링 활성화)
     strategy = DailyDCAStrategy(
-        max_positions=30,              # 최대 30회 매수
+        max_positions=10,              # 최대 10회 매수
         profit_target_percent=3.0,     # 3% 익절
         lookback_days=7,               # 최근 7일 고점 추적
         pullback_percent=3.0,          # 고점 대비 3% 하락 시 매수
         position_scaling=True,         # ⭐ 포지션 스케일링 활성화
         base_quantity=1,               # 기본 1주
-        depth_threshold=5.0,           # 5%마다 수량 증가
+        depth_threshold=5.0,           # 평균가 대비 5%마다 수량 증가
         max_quantity_multiplier=5      # 최대 5배
     )
 
@@ -126,7 +126,7 @@ def test_parameter_comparison():
         print(f"테스트 중: {config['name']}...")
 
         strategy = DailyDCAStrategy(
-            max_positions=30,
+            max_positions=10,
             profit_target_percent=3.0,
             lookback_days=7,
             pullback_percent=3.0,
