@@ -429,7 +429,7 @@ class DailyDCAStrategy(BaseStrategy):
 
     def __init__(
         self,
-        max_positions: int = 30,
+        max_positions: int = 10,
         profit_target_percent: float = 3.0,
         first_day_buy: bool = True,
         lookback_days: int = 7,
@@ -443,7 +443,7 @@ class DailyDCAStrategy(BaseStrategy):
         DailyDCAStrategy 초기화
 
         Args:
-            max_positions: 최대 매수 회차
+            max_positions: 최대 매수 회차 (기본 10회)
             profit_target_percent: 익절 기준 (%)
             first_day_buy: 첫날 무조건 매수 여부
             lookback_days: 최근 고점 추적 기간 (일)
@@ -464,12 +464,12 @@ class DailyDCAStrategy(BaseStrategy):
         self.depth_threshold = depth_threshold
         self.max_quantity_multiplier = max_quantity_multiplier
 
-    def _calculate_quantity(self, drop_from_peak: float) -> int:
+    def _calculate_quantity(self, drop_from_avg: float) -> int:
         """
-        하락 깊이에 따른 매수 수량 계산
+        평균 매수가 대비 하락 깊이에 따른 매수 수량 계산
 
         Args:
-            drop_from_peak: 고점 대비 하락률 (%)
+            drop_from_avg: 평균 매수가 대비 하락률 (%)
 
         Returns:
             int: 매수할 수량
@@ -477,8 +477,8 @@ class DailyDCAStrategy(BaseStrategy):
         if not self.position_scaling:
             return self.base_quantity
 
-        # 하락 깊이에 따라 배수 증가
-        multiplier = 1 + int(drop_from_peak / self.depth_threshold)
+        # 평균 매수가 대비 하락 깊이에 따라 배수 증가
+        multiplier = 1 + int(drop_from_avg / self.depth_threshold)
         multiplier = min(multiplier, self.max_quantity_multiplier)
 
         return self.base_quantity * multiplier
@@ -511,7 +511,6 @@ class DailyDCAStrategy(BaseStrategy):
 
         # 상태 추적: 각 회차별 (매수가, 수량) 튜플 리스트
         buy_positions = []
-        position_peak = 0.0  # 포지션 진입 후 최고가
 
         for idx in df.index:
             current_close = df.loc[idx, 'Close']
@@ -519,10 +518,6 @@ class DailyDCAStrategy(BaseStrategy):
             recent_high = df.loc[idx, 'Recent_High']
 
             sell_count = 0
-
-            # 포지션 최고가 업데이트
-            if len(buy_positions) > 0:
-                position_peak = max(position_peak, current_close)
 
             # 첫날 처리
             if pd.isna(prev_close):
@@ -532,7 +527,6 @@ class DailyDCAStrategy(BaseStrategy):
                     df.loc[idx, 'Buy_Condition'] = 'First_Day'
                     df.loc[idx, 'Buy_Quantity'] = quantity
                     buy_positions.append((current_close, quantity))
-                    position_peak = current_close
             else:
                 # 매수 조건 체크
                 should_buy = False
@@ -552,14 +546,20 @@ class DailyDCAStrategy(BaseStrategy):
 
                 # 매수 실행
                 if should_buy and len(buy_positions) < self.max_positions:
-                    # 포지션 고점 대비 하락률 계산 (스케일링용)
-                    if len(buy_positions) > 0 and position_peak > 0:
-                        drop_from_peak = ((position_peak - current_close) / position_peak) * 100
-                    else:
-                        drop_from_peak = 0.0
+                    # 평균 매수가 대비 하락률 계산 (스케일링용)
+                    if len(buy_positions) > 0:
+                        # 현재 보유 포지션의 평균 매수가 계산
+                        total_cost = sum(price * qty for price, qty in buy_positions)
+                        total_quantity = sum(qty for _, qty in buy_positions)
+                        avg_price = total_cost / total_quantity if total_quantity > 0 else current_close
 
-                    # 하락 깊이에 따른 수량 계산
-                    quantity = self._calculate_quantity(drop_from_peak)
+                        # 평균가 대비 하락률
+                        drop_from_avg = ((avg_price - current_close) / avg_price) * 100
+                    else:
+                        drop_from_avg = 0.0
+
+                    # 평균 매수가 대비 하락 깊이에 따른 수량 계산
+                    quantity = self._calculate_quantity(drop_from_avg)
 
                     df.loc[idx, 'Signal'] = 1
                     df.loc[idx, 'Buy_Condition'] = buy_reason
@@ -587,10 +587,6 @@ class DailyDCAStrategy(BaseStrategy):
                         df.loc[idx, 'Signal'] = -1
                         df.loc[idx, 'Sell_Count'] = sell_count
                         buy_positions = remaining_positions
-
-                        # 모두 매도하면 position_peak 초기화
-                        if len(buy_positions) == 0:
-                            position_peak = 0.0
 
             # 현재 상태 기록
             df.loc[idx, 'Position_Count'] = len(buy_positions)
