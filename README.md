@@ -47,11 +47,12 @@ TQQQ, SOXL 등 변동성이 큰 레버리지 ETF의 과거 데이터를 분석�
    - 예: 3% 하락 시 30% 매수, 7% 하락 시 70% 매수
    - 매도도 단계별로 설정 가능
 
-7. **일일 DCA + 회차별 익절 + 트레일링 매수** (DailyDCAStrategy) ⭐ NEW
+7. **일일 DCA + 회차별 익절 + 트레일링 매수 + 포지션 스케일링** (DailyDCAStrategy) ⭐ NEW
    - **스마트 매수**: ① 전일 대비 하락 OR ② 최근 고점 대비 N% 하락
    - **상승장 대응**: 상승 추세에서도 조정 구간마다 자동 매수
+   - **포지션 스케일링**: 하락 깊이에 따라 매수 수량 자동 증가 (5% 하락→1주, 10% 하락→2주, 15% 하락→3주...)
    - **회차별 익절**: 각 매수 회차별로 3% 이상 수익난 것만 개별 매도
-   - **하락장 최적화**: 하락장에서는 평균단가 낮추기
+   - **평균 단가 개선**: 큰 하락에 더 많이 사서 평균 단가 빠르게 낮춤
    - 레버리지 ETF의 높은 변동성에 최적화된 전략
 
 ### 📈 기술적 지표 기반 전략 (레거시)
@@ -213,43 +214,63 @@ strategy = CombinedPercentageStrategy(
 )
 ```
 
-### ⭐ 일일 DCA + 회차별 익절 + 트레일링 매수 (NEW!)
+### ⭐ 일일 DCA + 회차별 익절 + 트레일링 매수 + 포지션 스케일링 (NEW!)
 
 ```python
 from src.strategies.percentage_strategy import DailyDCAStrategy
 
-# 균형잡힌 설정 (추천)
+# 균형잡힌 설정 (추천) ⭐ 포지션 스케일링 활성화
 strategy = DailyDCAStrategy(
-    max_positions=30,           # 최대 30회까지 매수
-    profit_target_percent=3.0,  # 각 회차별 3% 익절
-    first_day_buy=True,         # 첫날 무조건 매수
-    lookback_days=7,            # 최근 7일 고점 추적
-    pullback_percent=3.0        # 고점 대비 3% 하락 시 매수
+    max_positions=30,              # 최대 30회까지 매수
+    profit_target_percent=3.0,     # 각 회차별 3% 익절
+    first_day_buy=True,            # 첫날 무조건 매수
+    lookback_days=7,               # 최근 7일 고점 추적
+    pullback_percent=3.0,          # 고점 대비 3% 하락 시 매수
+    position_scaling=True,         # ⭐ 포지션 스케일링 활성화
+    base_quantity=1,               # 기본 1주
+    depth_threshold=5.0,           # 5%마다 수량 증가
+    max_quantity_multiplier=5      # 최대 5배
 )
 
-# 공격적 설정 (빈번한 매수)
+# 공격적 설정 (빈번한 매수 + 빠른 스케일링)
 strategy_aggressive = DailyDCAStrategy(
     max_positions=50,
-    profit_target_percent=2.0,  # 2%만 올라도 익절
-    lookback_days=5,            # 짧은 기간
-    pullback_percent=2.0        # 작은 하락에도 매수
+    profit_target_percent=2.0,
+    lookback_days=5,
+    pullback_percent=2.0,
+    position_scaling=True,
+    depth_threshold=3.0,           # 3%마다 수량 증가 (더 공격적)
+    max_quantity_multiplier=10     # 최대 10배
 )
 
-# 보수적 설정 (선별적 매수)
+# 보수적 설정 (선별적 매수 + 느린 스케일링)
 strategy_conservative = DailyDCAStrategy(
     max_positions=20,
-    profit_target_percent=5.0,  # 5% 이상 수익 필요
-    lookback_days=10,           # 긴 기간
-    pullback_percent=5.0        # 큰 하락에만 매수
+    profit_target_percent=5.0,
+    lookback_days=10,
+    pullback_percent=5.0,
+    position_scaling=True,
+    depth_threshold=10.0,          # 10%마다 수량 증가 (더 보수적)
+    max_quantity_multiplier=3      # 최대 3배
 )
 
-# 동작 방식:
-# - 1일차: 무조건 1회 매수
-# - 2일차: 전일 종가 < 당일 종가 → 2회 매수 (조건1)
-# - 3일차: 전일 종가는 높지만, 최근 7일 고점 대비 3% 하락 → 3회 매수 (조건2) ⭐상승장 대응
-# - 4일차: 전일 종가 > 당일 종가 → 3% 이상 수익난 회차만 개별 매도
+# 스케일링 OFF (고정 수량)
+strategy_fixed = DailyDCAStrategy(
+    max_positions=30,
+    profit_target_percent=3.0,
+    position_scaling=False,        # 스케일링 비활성화
+    base_quantity=1                # 항상 1주씩만 매수
+)
+
+# 동작 방식 (포지션 스케일링 ON):
+# - 1일차: $100에 1주 매수 (고점 $100)
+# - 2일차: $95 (-5%) → 전일↓ + 고점대비 5% → 2주 매수 (고점 $100)
+# - 3일차: $90 (-10%) → 전일↓ + 고점대비 10% → 3주 매수 (고점 $100)
+# - 4일차: $93 (+3.3%) → 3% 이상 수익난 회차만 개별 매도
+# - 5일차: $98 (상승중) → 최근 7일 고점($100) 대비 2% → 매수 안함
+# - 6일차: $96 → 고점($100) 대비 4% → 1주 매수 (조건2: 트레일링) ⭐상승장 대응
 # - 각 회차별 매수가를 개별 추적하여 수익난 회차만 먼저 매도
-# - 반복...
+# - 하락 깊이에 따라 수량 자동 증가로 평균 단가 빠르게 낮춤
 ```
 
 ### 예제 스크립트 실행

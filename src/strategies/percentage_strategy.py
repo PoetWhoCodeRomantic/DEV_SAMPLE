@@ -414,11 +414,15 @@ class CombinedPercentageStrategy(BaseStrategy):
 
 class DailyDCAStrategy(BaseStrategy):
     """
-    일일 DCA + 회차별 익절 + 트레일링 매수 전략
+    일일 DCA + 회차별 익절 + 트레일링 매수 + 포지션 스케일링 전략
 
     매수 조건 (둘 중 하나 만족):
       1. 전일 종가보다 낮을 때
       2. 최근 N일 최고가 대비 M% 이상 하락했을 때
+
+    포지션 스케일링:
+      - 하락 깊이에 따라 매수 수량 자동 증가
+      - 큰 하락 시 더 많이 사서 평균 단가 빠르게 낮춤
 
     매도: 각 회차별로 3% 이상 수익난 포지션만 개별 매도
     """
@@ -429,7 +433,11 @@ class DailyDCAStrategy(BaseStrategy):
         profit_target_percent: float = 3.0,
         first_day_buy: bool = True,
         lookback_days: int = 7,
-        pullback_percent: float = 3.0
+        pullback_percent: float = 3.0,
+        position_scaling: bool = True,
+        base_quantity: int = 1,
+        depth_threshold: float = 5.0,
+        max_quantity_multiplier: int = 5
     ):
         """
         DailyDCAStrategy 초기화
@@ -440,6 +448,10 @@ class DailyDCAStrategy(BaseStrategy):
             first_day_buy: 첫날 무조건 매수 여부
             lookback_days: 최근 고점 추적 기간 (일)
             pullback_percent: 고점 대비 하락률 매수 기준 (%)
+            position_scaling: 포지션 스케일링 사용 여부
+            base_quantity: 기본 매수 수량
+            depth_threshold: 하락 몇%마다 수량 증가
+            max_quantity_multiplier: 최대 수량 배수
         """
         super().__init__(name=f"DailyDCA({max_positions}회)")
         self.max_positions = max_positions
@@ -447,10 +459,33 @@ class DailyDCAStrategy(BaseStrategy):
         self.first_day_buy = first_day_buy
         self.lookback_days = lookback_days
         self.pullback_percent = pullback_percent
+        self.position_scaling = position_scaling
+        self.base_quantity = base_quantity
+        self.depth_threshold = depth_threshold
+        self.max_quantity_multiplier = max_quantity_multiplier
+
+    def _calculate_quantity(self, drop_from_peak: float) -> int:
+        """
+        하락 깊이에 따른 매수 수량 계산
+
+        Args:
+            drop_from_peak: 고점 대비 하락률 (%)
+
+        Returns:
+            int: 매수할 수량
+        """
+        if not self.position_scaling:
+            return self.base_quantity
+
+        # 하락 깊이에 따라 배수 증가
+        multiplier = 1 + int(drop_from_peak / self.depth_threshold)
+        multiplier = min(multiplier, self.max_quantity_multiplier)
+
+        return self.base_quantity * multiplier
 
     def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
         """
-        일일 DCA 시그널 생성 (회차별 개별 익절 + 트레일링 매수)
+        일일 DCA 시그널 생성 (회차별 개별 익절 + 트레일링 매수 + 포지션 스케일링)
 
         Args:
             data: OHLCV 데이터프레임
@@ -469,11 +504,14 @@ class DailyDCAStrategy(BaseStrategy):
         # 시그널 초기화
         df['Signal'] = 0
         df['Position_Count'] = 0
+        df['Total_Quantity'] = 0  # 총 보유 수량
         df['Sell_Count'] = 0  # 매도한 회차 수
-        df['Buy_Condition'] = ''  # 매수 조건 추적 (디버깅용)
+        df['Buy_Quantity'] = 0  # 매수한 수량
+        df['Buy_Condition'] = ''  # 매수 조건 추적
 
-        # 상태 추적: 각 회차별 매수가 리스트
-        buy_prices = []
+        # 상태 추적: 각 회차별 (매수가, 수량) 튜플 리스트
+        buy_positions = []
+        position_peak = 0.0  # 포지션 진입 후 최고가
 
         for idx in df.index:
             current_close = df.loc[idx, 'Close']
@@ -482,12 +520,19 @@ class DailyDCAStrategy(BaseStrategy):
 
             sell_count = 0
 
+            # 포지션 최고가 업데이트
+            if len(buy_positions) > 0:
+                position_peak = max(position_peak, current_close)
+
             # 첫날 처리
             if pd.isna(prev_close):
                 if self.first_day_buy:
+                    quantity = self.base_quantity
                     df.loc[idx, 'Signal'] = 1
                     df.loc[idx, 'Buy_Condition'] = 'First_Day'
-                    buy_prices.append(current_close)
+                    df.loc[idx, 'Buy_Quantity'] = quantity
+                    buy_positions.append((current_close, quantity))
+                    position_peak = current_close
             else:
                 # 매수 조건 체크
                 should_buy = False
@@ -506,32 +551,49 @@ class DailyDCAStrategy(BaseStrategy):
                         buy_reason = f'Pullback_{drop_from_high:.1f}%'
 
                 # 매수 실행
-                if should_buy and len(buy_prices) < self.max_positions:
+                if should_buy and len(buy_positions) < self.max_positions:
+                    # 포지션 고점 대비 하락률 계산 (스케일링용)
+                    if len(buy_positions) > 0 and position_peak > 0:
+                        drop_from_peak = ((position_peak - current_close) / position_peak) * 100
+                    else:
+                        drop_from_peak = 0.0
+
+                    # 하락 깊이에 따른 수량 계산
+                    quantity = self._calculate_quantity(drop_from_peak)
+
                     df.loc[idx, 'Signal'] = 1
                     df.loc[idx, 'Buy_Condition'] = buy_reason
-                    buy_prices.append(current_close)
+                    df.loc[idx, 'Buy_Quantity'] = quantity
+                    buy_positions.append((current_close, quantity))
 
                 # 매도 조건: 전일보다 상승 + 수익난 회차 있음
-                elif current_close > prev_close and len(buy_prices) > 0:
+                elif current_close > prev_close and len(buy_positions) > 0:
                     # 상승: 회차별 익절 체크
-                    remaining_prices = []
+                    remaining_positions = []
+                    total_sell_quantity = 0
 
-                    for buy_price in buy_prices:
+                    for buy_price, quantity in buy_positions:
                         profit_pct = ((current_close - buy_price) / buy_price) * 100
 
                         if profit_pct >= self.profit_target_percent:
                             # 이 회차는 매도
                             sell_count += 1
+                            total_sell_quantity += quantity
                         else:
                             # 이 회차는 유지
-                            remaining_prices.append(buy_price)
+                            remaining_positions.append((buy_price, quantity))
 
                     if sell_count > 0:
                         df.loc[idx, 'Signal'] = -1
                         df.loc[idx, 'Sell_Count'] = sell_count
-                        buy_prices = remaining_prices
+                        buy_positions = remaining_positions
+
+                        # 모두 매도하면 position_peak 초기화
+                        if len(buy_positions) == 0:
+                            position_peak = 0.0
 
             # 현재 상태 기록
-            df.loc[idx, 'Position_Count'] = len(buy_prices)
+            df.loc[idx, 'Position_Count'] = len(buy_positions)
+            df.loc[idx, 'Total_Quantity'] = sum(qty for _, qty in buy_positions)
 
         return df
