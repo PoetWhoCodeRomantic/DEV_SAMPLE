@@ -97,10 +97,12 @@ TQQQ, SOXL 등 변동성이 큰 레버리지 ETF의 과거 데이터를 분석�
 
 ```
 .
+├── config.yaml                          # ⭐ 설정 파일
 ├── src/
 │   ├── data/
 │   │   ├── __init__.py
-│   │   └── data_fetcher.py          # 데이터 수집
+│   │   ├── data_fetcher.py          # 데이터 수집
+│   │   └── database.py              # SQLite 데이터베이스
 │   ├── strategies/
 │   │   ├── __init__.py
 │   │   ├── base_strategy.py         # 기본 전략 클래스
@@ -115,17 +117,21 @@ TQQQ, SOXL 등 변동성이 큰 레버리지 ETF의 과거 데이터를 분석�
 │   │   └── performance.py           # 성과 분석
 │   └── utils/
 │       ├── __init__.py
+│       ├── config.py                # ⭐ 설정 로더
 │       ├── indicators.py            # 기술적 지표 (레거시)
 │       └── visualization.py         # 시각화
 ├── examples/
-│   ├── percentage_strategy_example.py   # ⭐ 퍼센트 전략 예제 (추천)
-│   ├── custom_percentage_test.py        # ⭐ 커스텀 조건 테스트 (추천)
+│   ├── daily_accumulation_test.py       # ⭐ 일일 DCA 전략 (config 사용)
+│   ├── percentage_strategy_example.py   # 퍼센트 전략 예제
+│   ├── custom_percentage_test.py        # 커스텀 조건 테스트
 │   ├── basic_example.py                 # 기본 예제
 │   ├── strategy_comparison.py           # 전략 비교
 │   └── parameter_optimization.py        # 파라미터 최적화
 ├── tests/
 ├── requirements.txt
-└── README.md
+├── README.md
+├── DCA_STRATEGY_GUIDE.md            # DailyDCA 전략 가이드
+└── DATABASE_GUIDE.md                # 데이터베이스 가이드
 ```
 
 ## 설치 방법
@@ -152,9 +158,88 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+### 4. 설정 파일 확인 및 수정
+`config.yaml` 파일에서 종목, 기간, 전략 파라미터 등을 설정할 수 있습니다.
+
+```yaml
+# config.yaml
+data:
+  default_symbol: TQQQ  # 기본 종목
+  period: 1y            # 데이터 기간
+  symbols:              # 수집할 종목 리스트
+    - TQQQ
+    - SOXL
+    - UPRO
+
+backtest:
+  initial_capital: 10000  # 초기 자본
+  commission: 0.001       # 수수료
+  slippage: 0.001         # 슬리피지
+
+strategies:
+  daily_dca:
+    max_positions: 10
+    profit_target_percent: 3.0
+    # ... 기타 파라미터
+```
+
 ## 사용 방법
 
-### ⭐ 퍼센트 기반 전략 예제 (추천)
+### ⭐ 설정 파일 기반 사용 (추천)
+
+#### 1. config.yaml 설정
+
+프로젝트 루트의 `config.yaml` 파일에서 모든 설정을 관리할 수 있습니다:
+
+```yaml
+# 데이터 수집 설정
+data:
+  default_symbol: TQQQ    # 테스트할 종목
+  period: 1y              # 1년치 데이터
+
+# 백테스트 설정
+backtest:
+  initial_capital: 10000  # 초기 자본 $10,000
+
+# 전략 설정
+strategies:
+  daily_dca:
+    max_positions: 10
+    profit_target_percent: 3.0
+    position_scaling: true
+    depth_threshold: 5.0
+```
+
+#### 2. 프리셋 사용
+
+`config.yaml`에는 미리 정의된 4가지 프리셋이 있습니다:
+- `balanced`: 균형잡힌 설정 (추천)
+- `aggressive`: 공격적 설정
+- `conservative`: 보수적 설정
+- `fixed`: 스케일링 OFF
+
+```python
+from src.utils.config import Config
+from src.strategies.percentage_strategy import DailyDCAStrategy
+
+# Config 로드
+config = Config()
+
+# 프리셋 사용
+strategy_config = config.get_daily_dca_config('aggressive')
+strategy = DailyDCAStrategy(**strategy_config)
+```
+
+#### 3. 예제 실행
+
+설정 파일을 사용하는 예제:
+
+```bash
+cd examples
+python daily_accumulation_test.py  # config.yaml 설정 자동 사용
+```
+
+### 퍼센트 기반 전략 예제 (코드에서 직접 설정)
 
 ```python
 from src.data.data_fetcher import DataFetcher
