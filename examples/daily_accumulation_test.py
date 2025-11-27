@@ -9,6 +9,7 @@ sys.path.append('..')
 from src.data.data_fetcher import DataFetcher
 from src.strategies.percentage_strategy import DailyDCAStrategy
 from src.backtesting.backtester import Backtester
+from src.utils.config import Config
 
 
 def test_daily_accumulation():
@@ -20,34 +21,46 @@ def test_daily_accumulation():
     print("전략 설명:")
     print("  1. 매일 종가 체크")
     print("  2. 첫날 무조건 1회 매수")
-    print("  3. 전일 종가보다 낮으면 추가 매수 (최대 10회)")
-    print("  4. 전일 종가보다 높으면 각 회차별로 3% 이상 수익난 것만 매도")
+    print("  3. 전일 종가보다 낮으면 추가 매수")
+    print("  4. 전일 종가보다 높으면 각 회차별로 수익난 것만 매도")
     print("  5. ⭐ 평균 매수가 대비 하락 깊이에 따라 매수 수량 자동 증가")
     print()
 
+    # 설정 파일 로드
+    config = Config()
+    data_config = config.get_data_config()
+    backtest_config = config.get_backtest_config()
+    strategy_config = config.get_daily_dca_config()
+
+    print("[ 설정 정보 ]")
+    print(f"  종목: {data_config['default_symbol']}")
+    print(f"  기간: {data_config['period']}")
+    print(f"  초기 자본: ${backtest_config['initial_capital']:,}")
+    print(f"  최대 회차: {strategy_config['max_positions']}회")
+    print(f"  익절 목표: {strategy_config['profit_target_percent']}%")
+    print()
+
     # 데이터 수집
-    print("TQQQ 데이터 수집 중...")
+    print(f"{data_config['default_symbol']} 데이터 수집 중...")
     fetcher = DataFetcher()
-    data = fetcher.fetch_data('TQQQ', period='1y')
+    data = fetcher.fetch_data(
+        data_config['default_symbol'],
+        period=data_config['period']
+    )
     print(f"데이터 수집 완료: {len(data)} 일")
     print(f"기간: {data.index[0].date()} ~ {data.index[-1].date()}")
     print()
 
-    # 전략 설정 (포지션 스케일링 활성화)
-    strategy = DailyDCAStrategy(
-        max_positions=10,              # 최대 10회 매수
-        profit_target_percent=3.0,     # 3% 익절
-        lookback_days=7,               # 최근 7일 고점 추적
-        pullback_percent=3.0,          # 고점 대비 3% 하락 시 매수
-        position_scaling=True,         # ⭐ 포지션 스케일링 활성화
-        base_quantity=1,               # 기본 1주
-        depth_threshold=5.0,           # 평균가 대비 5%마다 수량 증가
-        max_quantity_multiplier=5      # 최대 5배
-    )
+    # 전략 설정 (config.yaml에서 로드)
+    strategy = DailyDCAStrategy(**strategy_config)
 
     # 백테스트 실행
     print("백테스트 실행 중...")
-    backtester = Backtester(initial_capital=10000)
+    backtester = Backtester(
+        initial_capital=backtest_config['initial_capital'],
+        commission=backtest_config['commission'],
+        slippage=backtest_config['slippage']
+    )
     results = backtester.run(strategy, data)
     print()
 
@@ -90,53 +103,43 @@ def test_daily_accumulation():
 def test_parameter_comparison():
     """파라미터별 성과 비교"""
     print("=" * 80)
-    print("[ 파라미터 비교 ] 포지션 스케일링 ON/OFF")
+    print("[ 파라미터 비교 ] 프리셋별 성과 비교")
     print("=" * 80)
     print()
 
+    # 설정 로드
+    config = Config()
+    data_config = config.get_data_config()
+    backtest_config = config.get_backtest_config()
+
     # 데이터 수집
     fetcher = DataFetcher()
-    data = fetcher.fetch_data('TQQQ', period='1y')
+    data = fetcher.fetch_data(
+        data_config['default_symbol'],
+        period=data_config['period']
+    )
 
-    # 포지션 스케일링 ON/OFF 비교
-    test_configs = [
-        {
-            'scaling': False,
-            'name': '스케일링 OFF (고정 1주)'
-        },
-        {
-            'scaling': True,
-            'depth_threshold': 10.0,
-            'name': '스케일링 ON (보수적: 10%마다)'
-        },
-        {
-            'scaling': True,
-            'depth_threshold': 5.0,
-            'name': '스케일링 ON (균형: 5%마다)'
-        },
-        {
-            'scaling': True,
-            'depth_threshold': 3.0,
-            'name': '스케일링 ON (공격적: 3%마다)'
-        }
-    ]
+    # 프리셋별 비교
+    presets = ['fixed', 'conservative', 'balanced', 'aggressive']
+    preset_names = {
+        'fixed': '스케일링 OFF (고정)',
+        'conservative': '보수적',
+        'balanced': '균형잡힌',
+        'aggressive': '공격적'
+    }
     results_summary = []
 
-    for config in test_configs:
-        print(f"테스트 중: {config['name']}...")
+    for preset in presets:
+        print(f"테스트 중: {preset_names[preset]}...")
 
-        strategy = DailyDCAStrategy(
-            max_positions=10,
-            profit_target_percent=3.0,
-            lookback_days=7,
-            pullback_percent=3.0,
-            position_scaling=config['scaling'],
-            base_quantity=1,
-            depth_threshold=config.get('depth_threshold', 5.0),
-            max_quantity_multiplier=5
+        strategy_config = config.get_daily_dca_config(preset)
+        strategy = DailyDCAStrategy(**strategy_config)
+
+        backtester = Backtester(
+            initial_capital=backtest_config['initial_capital'],
+            commission=backtest_config['commission'],
+            slippage=backtest_config['slippage']
         )
-
-        backtester = Backtester(initial_capital=10000)
         test_results = backtester.run(strategy, data)
         metrics = backtester.calculate_metrics()
 
@@ -147,7 +150,7 @@ def test_parameter_comparison():
         max_quantity = buy_signals['Buy_Quantity'].max()
 
         results_summary.append({
-            'Config': config['name'],
+            'Config': preset_names[preset],
             'Total Return (%)': metrics['Total Return (%)'],
             'Sharpe Ratio': metrics['Sharpe Ratio'],
             'Max Drawdown (%)': metrics['Max Drawdown (%)'],
@@ -174,6 +177,7 @@ def test_parameter_comparison():
 
     print()
     print("💡 해석:")
+    print("  - 프리셋은 config.yaml에서 설정 가능")
     print("  - 스케일링 ON: 하락 깊이에 따라 매수 수량 자동 증가")
     print("  - 큰 하락에 더 많이 사서 평균 단가 빠르게 낮춤")
     print("  - 총수량/평균/최대 수량으로 공격성 확인 가능")

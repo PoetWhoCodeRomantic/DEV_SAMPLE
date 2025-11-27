@@ -1,0 +1,207 @@
+# ============================================================================
+# 레버리지 ETF 퀀트 트레이딩 설정 파일
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# 데이터 수집 설정
+# ----------------------------------------------------------------------------
+data:
+  # 수집할 종목 리스트
+  symbols:
+    - TQQQ    # ProShares UltraPro QQQ (3x)
+    - SOXL    # Direxion Daily Semiconductor Bull (3x)
+    - UPRO    # ProShares UltraPro S&P500 (3x)
+
+  # 기본 종목 (단일 종목 테스트 시 사용)
+  default_symbol: TQQQ
+
+  # 데이터 수집 기간
+  # 옵션: 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max
+  period: 1y
+
+  # 데이터 간격
+  # 옵션: 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo
+  interval: 1d
+
+  # 시작/종료 날짜 (period 대신 사용 가능, None이면 period 사용)
+  start_date: null  # 예: '2023-01-01'
+  end_date: null    # 예: '2024-12-31'
+
+# ----------------------------------------------------------------------------
+# 백테스트 설정
+# ----------------------------------------------------------------------------
+backtest:
+  # 초기 자본금 (USD)
+  initial_capital: 10000
+
+  # 거래 수수료 (0.001 = 0.1%)
+  commission: 0.001
+
+  # 슬리피지 (0.001 = 0.1%)
+  slippage: 0.001
+
+  # 포지션 크기 (1.0 = 100% 투자)
+  position_size: 1.0
+
+# ----------------------------------------------------------------------------
+# DailyDCA 전략 파라미터
+# ----------------------------------------------------------------------------
+strategies:
+  daily_dca:
+    # 전략 이름
+    name: "DailyDCA"
+
+    # 최대 매수 회차
+    max_positions: 10
+
+    # 익절 목표 수익률 (%)
+    profit_target_percent: 3.0
+
+    # 첫날 무조건 매수 여부
+    first_day_buy: true
+
+    # 트레일링 매수: 최근 고점 추적 기간 (일)
+    lookback_days: 7
+
+    # 트레일링 매수: 고점 대비 하락률 매수 기준 (%)
+    pullback_percent: 3.0
+
+    # 포지션 스케일링 활성화 여부
+    position_scaling: true
+
+    # 포지션 스케일링: 기본 매수 수량
+    base_quantity: 1
+
+    # 포지션 스케일링: 수량 증가 기준 하락률 (%)
+    # 평균가 대비 이 %만큼 하락할 때마다 수량 1배씩 증가
+    depth_threshold: 5.0
+
+    # 포지션 스케일링: 최대 수량 배수
+    max_quantity_multiplier: 5
+
+    # 프리셋 설정들
+    presets:
+      # 균형잡힌 설정 (기본 추천)
+      balanced:
+        max_positions: 10
+        profit_target_percent: 3.0
+        lookback_days: 7
+        pullback_percent: 3.0
+        position_scaling: true
+        base_quantity: 1
+        depth_threshold: 5.0
+        max_quantity_multiplier: 5
+
+      # 공격적 설정
+      aggressive:
+        max_positions: 15
+        profit_target_percent: 2.0
+        lookback_days: 5
+        pullback_percent: 2.0
+        position_scaling: true
+        base_quantity: 1
+        depth_threshold: 3.0
+        max_quantity_multiplier: 10
+
+      # 보수적 설정
+      conservative:
+        max_positions: 8
+        profit_target_percent: 5.0
+        lookback_days: 10
+        pullback_percent: 5.0
+        position_scaling: true
+        base_quantity: 1
+        depth_threshold: 10.0
+        max_quantity_multiplier: 3
+
+      # 스케일링 OFF (고정 수량)
+      fixed:
+        max_positions: 10
+        profit_target_percent: 3.0
+        lookback_days: 7
+        pullback_percent: 3.0
+        position_scaling: false
+        base_quantity: 1
+        depth_threshold: 5.0
+        max_quantity_multiplier: 1
+
+  # 기타 전략 파라미터들
+  percentage_drop:
+    drop_percent: 5.0
+    sell_profit_percent: 3.0
+    lookback_days: 1
+
+  pyramiding:
+    buy_levels:
+      - [3.0, 0.2]   # 3% 하락 시 20% 투자
+      - [5.0, 0.3]   # 5% 하락 시 30% 투자
+      - [8.0, 0.3]   # 8% 하락 시 30% 투자
+      - [12.0, 0.2]  # 12% 하락 시 20% 투자
+    sell_profit_percent: 5.0
+
+  grid_trading:
+    grid_size: 3.0      # 그리드 간격 (%)
+    num_grids: 10       # 그리드 개수
+    center_price: null  # 중심 가격 (null이면 시작가 사용)
+
+  dca:
+    investment_interval: 7  # 투자 간격 (일)
+    sell_profit_percent: 10.0
+
+# ----------------------------------------------------------------------------
+# 데이터베이스 설정
+# ----------------------------------------------------------------------------
+database:
+  # 데이터베이스 파일 경로
+  path: "trading_data.db"
+
+  # 데이터 자동 저장 여부
+  auto_save: true
+
+  # 데이터 캐싱 여부
+  use_cache: true
+
+# ----------------------------------------------------------------------------
+# 출력 및 로깅 설정
+# ----------------------------------------------------------------------------
+output:
+  # 상세 출력 모드
+  verbose: true
+
+  # 결과 저장 경로
+  results_dir: "results"
+
+  # 차트 저장 여부
+  save_charts: false
+
+  # 차트 저장 경로
+  charts_dir: "charts"
+
+# ----------------------------------------------------------------------------
+# 테스트 설정
+# ----------------------------------------------------------------------------
+testing:
+  # 파라미터 비교 테스트 활성화
+  enable_parameter_comparison: true
+
+  # Buy & Hold 비교 활성화
+  enable_buy_hold_comparison: true
+
+  # 상세 거래 로그 출력
+  show_trade_log: false
+
+# ----------------------------------------------------------------------------
+# 리스크 관리 설정
+# ----------------------------------------------------------------------------
+risk:
+  # 최대 드로우다운 제한 (%)
+  max_drawdown_limit: 30.0
+
+  # 손절 활성화 여부
+  enable_stop_loss: false
+
+  # 손절 기준 (%)
+  stop_loss_percent: 20.0
+
+  # 포트폴리오 리밸런싱 주기 (일, 0이면 비활성화)
+  rebalance_days: 0
