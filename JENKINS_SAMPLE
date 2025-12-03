@@ -1,0 +1,200 @@
+def server = [:]
+server.name = 'uidcom-real-1'
+server.host = 'ip'
+server.user = 'was'
+server.password = 'pwd'
+//server.identityFile = '/var/lib/jenkins/.ssh/jenkins_id_rsa'
+server.port = 58824
+server.allowAnyHosts = true
+
+pipeline {
+
+	agent any
+
+	tools{
+		jdk('JDK11')
+	}
+
+  stages {
+    stage('01. git clone form bitbucket') {
+      steps {
+        script {
+          try {
+            git branch: 'develop',
+                  url: 'ssh://git@git.his.or.kr:7999/test/test.git'
+            sh "ls -lat"
+            sh "rm -rf ./.git"
+            env.cloneResult = true
+          } catch (error) {
+            print(error)
+            env.cloneResult = false
+            currentBuild.result = 'FAILURE'
+          }
+        }
+      }
+    }
+    stage('02. build jar with maven') {
+      // git 정보에 젠킨스 rsa공개키 등록 필요!!!
+      when {
+        expression {
+          return env.cloneResult ==~ true
+        }
+      }
+      steps {
+        script {
+          try {
+            sh """
+            rm -rf target
+            mkdir target
+            whereis mvn
+            cd /home/was/util
+            ls -lat
+            /home/was/util/apache-maven-3.3.9/bin/mvn --version
+            java -version
+            """
+            sh '/home/was/util/apache-maven-3.3.9/bin/mvn -Dmaven.test.failure.ignore=true clean package -f pom.xml'
+            sh """
+            pwd
+            ls -lat
+            cd target
+            ls -lat
+            """
+            env.mavenBuildResult = true
+          } catch (error) {
+            print(error)
+            echo 'Remove Deploy Files'
+            sh "rm -rf ./*"
+            env.mavenBuildResult = false
+            currentBuild.result = "FAILURE"
+          }
+        }
+      }
+    }
+    stage('03. put jar file to remote server') {
+      when {
+        expression {
+          return env.mavenBuildResult ==~ true
+        }
+      }
+      steps {
+        script {
+          try {
+            sh 'pwd'
+            sshPut remote: server, from: './target/test.war', into: '/home/was/apache-tomcat/build/test.war'
+            env.transferResult = true
+          } catch (error) {
+            print(error)
+            echo 'Remove Deploy Files'
+            sh "rm -rf ./*"
+            env.transferResult = false
+            currentBuild.result = "FAILURE"
+          }
+        }
+      }
+    }
+    stage('04. backup with app deploy file') {
+      when (
+        expression {
+          return env.transferResult ==~ true
+        }
+      }
+      steps {
+        script {
+          try {
+            sh 'pwd'
+            sshCommand remote: server, command: '''
+                    cd /home/was/apache-tomcat/webapps;
+                    /home/was/jdk-11.0.29+7/bin/jar cvf ./ROOT.war.bak ./ROOT
+                    '''
+            env.backupResult = true
+          } catch (error) {
+            print(error)
+            echo 'Remove Deploy Files'
+            sh "rm -rf ./*"
+            env.backupResult = false
+            currentBuild.result = "FAILURE"
+          }
+        }
+      }
+    }
+    stage('05. stop app service in remote server') {
+      when (
+        expression {
+          return env.backupResult ==~ true
+        }
+      }
+      steps {
+        script {
+          try {
+            sshCommand remote: server, command: '''
+                    cd /home/was/apache-tomcat/bin/;
+                    ./shutdown.sh;
+                    '''
+            env.stopResult = true
+          } catch (error) {
+            print(error)
+            echo 'Remove Deploy Files'
+            sh "rm -rf ./*"
+            env.stopResult = false
+            currentBuild.result = "FAILURE"
+          }
+        }
+      }
+    }
+    stage('06. app extract with war file') {
+      when (
+        expression {
+          return env.stopResult ==~ true
+        }
+      }
+      steps {
+        script {
+          try {
+            sshCommand remote: server, command: '''
+                    cd /home/was/apache-tomcat/webapps/ROOT/;
+                    rm -rf ./*;
+                    mv /home/was/apache-tomcat/build/test.war ./ROOT.war;
+                    /home/was/jdk-11.0.29+7/bin/jar xvf ./ROOT.war;
+                    cp -rf ./WEB-INF/classes/logback-real.xml ./WEB-INF/classes/logback.xml;
+                    rm -rf ./ROOT.war;
+                    '''
+            env.extractWarResult = true
+          } catch (error) {
+            print(error)
+            echo 'Remove Deploy Files'
+            sh "rm -rf ./*"
+            env.extractWarResult = false
+            currentBuild.result = "FAILURE"
+          }
+        }
+      }
+    }
+    stage('07. start app service in remote server') {
+      when (
+        expression {
+          return env.extractWarResult ==~ true
+        }
+      }
+      steps {
+        script {
+          try {
+            sshCommand remote: server, command: '''
+                    cd /home/was/apache-tomcat/bin/;
+                    ./startup.sh;
+                    '''
+            env.startAppResult = true
+          } catch (error) {
+            print(error)
+            echo 'Remove Deploy Files'
+            sh "rm -rf ./*"
+            env.startAppResult = false
+            currentBuild.result = "FAILURE"
+          } finally {
+            echo 'remote jenkins build files'
+            sh "rm -rf ./*"
+          }
+        }
+      }
+    }
+  }
+}
