@@ -1,0 +1,1264 @@
+# eGov 4.2 첨부파일 암복호화 시스템 구현 가이드
+
+## 목차
+1. [개요](#개요)
+2. [아키텍처](#아키텍처)
+3. [구현 파일 목록](#구현-파일-목록)
+4. [상세 구현](#상세-구현)
+5. [설정 파일](#설정-파일)
+6. [사용 방법](#사용-방법)
+7. [동작 흐름](#동작-흐름)
+8. [트러블슈팅](#트러블슈팅)
+
+---
+
+## 개요
+
+### 목적
+화면에 노출되는 첨부파일 ID와 경로를 자동으로 암복호화하여 보안을 강화합니다.
+
+### 주요 기능
+- **자동 복호화**: 클라이언트 → 서버로 전송되는 파라미터/Body 자동 복호화
+- **자동 암호화**: 서버 → 클라이언트로 응답하는 데이터 자동 암호화
+- **패턴 기반**: `***AtchFileId`, `atchFilePath` 패턴 자동 인식
+- **DB 연동**: Oracle DB 암복호화 함수 활용
+
+### 기술 스택
+- **Framework**: eGov 4.2 (Spring Framework 5.3.27)
+- **Build**: Maven
+- **Database**: Oracle
+- **암호화**: DB 암복호화 함수
+
+---
+
+## 아키텍처
+
+### 전체 구조도
+```
+클라이언트 요청 (*.do, *.dx)
+    ↓
+① Filter (DecryptionFilter)
+    - GET/POST 파라미터 복호화
+    ↓
+② RequestBodyAdvice (DecryptRequestBodyAdvice)
+    - @RequestBody JSON 복호화
+    ↓
+③ Controller
+    - 이미 복호화된 데이터로 비즈니스 로직 수행
+    ↓
+④ Interceptor (EncryptModelInterceptor)
+    - @Controller Model 데이터 암호화
+    ↓
+⑤ ResponseBodyAdvice (EncryptResponseBodyAdvice)
+    - @RestController 응답 데이터 암호화
+    ↓
+클라이언트 응답 (암호화된 데이터)
+```
+
+### 컴포넌트 역할 분담
+
+| 컴포넌트 | 역할 | 처리 대상 | 시점 |
+|---------|------|----------|------|
+| **DecryptionFilter** | 파라미터 복호화 | @RequestParam, Form 데이터 | Spring 진입 전 |
+| **DecryptRequestBodyAdvice** | Body 복호화 | @RequestBody JSON | JSON→객체 변환 후 |
+| **EncryptModelInterceptor** | Model 암호화 | @Controller의 Model | View 렌더링 전 |
+| **EncryptResponseBodyAdvice** | 응답 암호화 | @RestController Return | 객체→JSON 변환 전 |
+
+---
+
+## 구현 파일 목록
+
+### Java 파일
+```
+src/main/java/egovframework/com/cmm/
+├── service/
+│   └── CryptoService.java                    # DB 암복호화 서비스
+├── util/
+│   └── CryptoFieldProcessor.java             # 공통 필드 처리 유틸
+├── filter/
+│   └── DecryptionFilter.java                 # 파라미터 복호화 필터
+├── web/
+│   ├── DecryptRequestBodyAdvice.java         # RequestBody 복호화
+│   └── EncryptResponseBodyAdvice.java        # Response 암호화
+└── interceptor/
+    └── EncryptModelInterceptor.java          # Model 암호화 인터셉터
+```
+
+### 설정 파일
+```
+src/main/resources/egovframework/
+├── sqlmap/com/cmm/
+│   └── crypto-mapper.xml                     # DB 암복호화 Mapper
+└── spring/com/
+    ├── context-common.xml                    # 공통 설정
+    └── context-mapper.xml                    # Mapper 설정
+
+src/main/webapp/WEB-INF/
+├── web.xml                                   # 웹 설정
+└── config/egovframework/springmvc/
+    └── dispatcher-servlet.xml                # Spring MVC 설정
+```
+
+---
+
+## 상세 구현
+
+### 1. CryptoService.java
+**경로**: `src/main/java/egovframework/com/cmm/service/CryptoService.java`
+
+```java
+package egovframework.com.cmm.service;
+
+import java.util.HashMap;
+import java.util.Map;
+
+import javax.annotation.Resource;
+
+import org.apache.commons.lang3.StringUtils;
+import org.apache.ibatis.session.SqlSession;
+import org.springframework.stereotype.Service;
+
+/**
+ * DB 암복호화 서비스
+ */
+@Service("cryptoService")
+public class CryptoService {
+    
+    @Resource(name = "sqlSession")
+    private SqlSession sqlSession;
+    
+    /**
+     * DB 암호화 함수 호출
+     * @param plainText 평문
+     * @return 암호화된 문자열
+     */
+    public String encrypt(String plainText) {
+        if (StringUtils.isEmpty(plainText)) {
+            return plainText;
+        }
+        
+        try {
+            Map<String, Object> params = new HashMap<>();
+            params.put("plainText", plainText);
+            return sqlSession.selectOne("crypto.encrypt", params);
+        } catch (Exception e) {
+            throw new RuntimeException("암호화 실패", e);
+        }
+    }
+    
+    /**
+     * DB 복호화 함수 호출
+     * @param encryptedText 암호화된 문자열
+     * @return 복호화된 문자열
+     */
+    public String decrypt(String encryptedText) {
+        if (StringUtils.isEmpty(encryptedText)) {
+            return encryptedText;
+        }
+        
+        try {
+            Map<String, Object> params = new HashMap<>();
+            params.put("encryptedText", encryptedText);
+            return sqlSession.selectOne("crypto.decrypt", params);
+        } catch (Exception e) {
+            throw new RuntimeException("복호화 실패", e);
+        }
+    }
+}
+```
+
+### 2. CryptoFieldProcessor.java
+**경로**: `src/main/java/egovframework/com/cmm/util/CryptoFieldProcessor.java`
+
+```java
+package egovframework.com.cmm.util;
+
+import java.lang.reflect.Field;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Pattern;
+
+import javax.annotation.Resource;
+
+import org.springframework.stereotype.Component;
+
+import egovframework.com.cmm.service.CryptoService;
+
+/**
+ * 암복호화 필드 처리 공통 유틸리티
+ */
+@Component("cryptoFieldProcessor")
+public class CryptoFieldProcessor {
+    
+    @Resource(name = "cryptoService")
+    private CryptoService cryptoService;
+    
+    // ***AtchFileId 패턴
+    private static final Pattern ATCH_FILE_ID_PATTERN = Pattern.compile(".*AtchFileId$");
+    // atchFilePath
+    private static final String ATCH_FILE_PATH = "atchFilePath";
+    
+    /**
+     * 암호화가 필요한 필드인지 체크
+     */
+    public boolean needsCrypto(String fieldName) {
+        return ATCH_FILE_ID_PATTERN.matcher(fieldName).matches() 
+            || ATCH_FILE_PATH.equalsIgnoreCase(fieldName);
+    }
+    
+    /**
+     * 객체 내부 필드 복호화 (재귀)
+     */
+    @SuppressWarnings("unchecked")
+    public Object decryptObject(Object obj) {
+        if (obj == null) {
+            return null;
+        }
+        
+        try {
+            // List 처리
+            if (obj instanceof List) {
+                List<Object> list = (List<Object>) obj;
+                for (int i = 0; i < list.size(); i++) {
+                    list.set(i, decryptObject(list.get(i)));
+                }
+                return list;
+            }
+            
+            // Map 처리
+            if (obj instanceof Map) {
+                Map<String, Object> map = (Map<String, Object>) obj;
+                for (Map.Entry<String, Object> entry : map.entrySet()) {
+                    String key = entry.getKey();
+                    Object value = entry.getValue();
+                    
+                    if (needsCrypto(key) && value instanceof String) {
+                        entry.setValue(cryptoService.decrypt((String) value));
+                    } else if (value instanceof Map || value instanceof List) {
+                        entry.setValue(decryptObject(value));
+                    }
+                }
+                return map;
+            }
+            
+            // VO/DTO 객체 처리
+            if (!obj.getClass().getName().startsWith("java.")) {
+                return decryptVoFields(obj);
+            }
+            
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        
+        return obj;
+    }
+    
+    /**
+     * 객체 내부 필드 암호화 (재귀)
+     */
+    @SuppressWarnings("unchecked")
+    public Object encryptObject(Object obj) {
+        if (obj == null) {
+            return null;
+        }
+        
+        try {
+            // List 처리
+            if (obj instanceof List) {
+                List<Object> list = (List<Object>) obj;
+                for (int i = 0; i < list.size(); i++) {
+                    list.set(i, encryptObject(list.get(i)));
+                }
+                return list;
+            }
+            
+            // Map 처리
+            if (obj instanceof Map) {
+                Map<String, Object> map = (Map<String, Object>) obj;
+                for (Map.Entry<String, Object> entry : map.entrySet()) {
+                    String key = entry.getKey();
+                    Object value = entry.getValue();
+                    
+                    if (needsCrypto(key) && value instanceof String) {
+                        entry.setValue(cryptoService.encrypt((String) value));
+                    } else if (value instanceof Map || value instanceof List) {
+                        entry.setValue(encryptObject(value));
+                    }
+                }
+                return map;
+            }
+            
+            // VO/DTO 객체 처리
+            if (!obj.getClass().getName().startsWith("java.")) {
+                return encryptVoFields(obj);
+            }
+            
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        
+        return obj;
+    }
+    
+    /**
+     * VO 필드 복호화
+     */
+    private Object decryptVoFields(Object vo) {
+        try {
+            Field[] fields = vo.getClass().getDeclaredFields();
+            
+            for (Field field : fields) {
+                field.setAccessible(true);
+                String fieldName = field.getName();
+                Object value = field.get(vo);
+                
+                if (value == null) {
+                    continue;
+                }
+                
+                // 암호화 대상 필드
+                if (needsCrypto(fieldName) && value instanceof String) {
+                    field.set(vo, cryptoService.decrypt((String) value));
+                }
+                // 중첩 객체 처리
+                else if (value instanceof List || value instanceof Map) {
+                    field.set(vo, decryptObject(value));
+                } else if (!field.getType().isPrimitive() 
+                        && !field.getType().getName().startsWith("java.lang")) {
+                    field.set(vo, decryptVoFields(value));
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return vo;
+    }
+    
+    /**
+     * VO 필드 암호화
+     */
+    private Object encryptVoFields(Object vo) {
+        try {
+            Field[] fields = vo.getClass().getDeclaredFields();
+            
+            for (Field field : fields) {
+                field.setAccessible(true);
+                String fieldName = field.getName();
+                Object value = field.get(vo);
+                
+                if (value == null) {
+                    continue;
+                }
+                
+                // 암호화 대상 필드
+                if (needsCrypto(fieldName) && value instanceof String) {
+                    field.set(vo, cryptoService.encrypt((String) value));
+                }
+                // 중첩 객체 처리
+                else if (value instanceof List || value instanceof Map) {
+                    field.set(vo, encryptObject(value));
+                } else if (!field.getType().isPrimitive() 
+                        && !field.getType().getName().startsWith("java.lang")) {
+                    field.set(vo, encryptVoFields(value));
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return vo;
+    }
+}
+```
+
+### 3. DecryptionFilter.java
+**경로**: `src/main/java/egovframework/com/cmm/filter/DecryptionFilter.java`
+
+```java
+package egovframework.com.cmm.filter;
+
+import java.io.IOException;
+import java.util.Collections;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.regex.Pattern;
+
+import javax.annotation.Resource;
+import javax.servlet.Filter;
+import javax.servlet.FilterChain;
+import javax.servlet.FilterConfig;
+import javax.servlet.ServletException;
+import javax.servlet.ServletRequest;
+import javax.servlet.ServletResponse;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletRequestWrapper;
+
+import org.springframework.stereotype.Component;
+
+import egovframework.com.cmm.service.CryptoService;
+
+/**
+ * 암호화된 파라미터 자동 복호화 필터
+ * *.do, *.dx 패턴에만 적용
+ */
+@Component("decryptionFilter")
+public class DecryptionFilter implements Filter {
+    
+    @Resource(name = "cryptoService")
+    private CryptoService cryptoService;
+    
+    private static final Pattern ATCH_FILE_ID_PATTERN = Pattern.compile(".*AtchFileId$");
+    private static final String ATCH_FILE_PATH = "atchFilePath";
+    
+    @Override
+    public void init(FilterConfig filterConfig) throws ServletException {
+        System.out.println("========================================");
+        System.out.println("DecryptionFilter 초기화!");
+        System.out.println("CryptoService: " + cryptoService);
+        System.out.println("========================================");
+    }
+    
+    @Override
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) 
+            throws IOException, ServletException {
+        
+        HttpServletRequest httpRequest = (HttpServletRequest) request;
+        
+        // CryptoService null 체크
+        if (cryptoService == null) {
+            System.err.println("CryptoService is null! 복호화 건너뜀");
+            chain.doFilter(request, response);
+            return;
+        }
+        
+        // Request Wrapper로 감싸기
+        DecryptedRequestWrapper wrappedRequest = 
+            new DecryptedRequestWrapper(httpRequest, cryptoService);
+        
+        chain.doFilter(wrappedRequest, response);
+    }
+    
+    @Override
+    public void destroy() {
+        System.out.println("DecryptionFilter 종료");
+    }
+    
+    private static boolean needsDecryption(String paramName) {
+        return ATCH_FILE_ID_PATTERN.matcher(paramName).matches() 
+            || ATCH_FILE_PATH.equalsIgnoreCase(paramName);
+    }
+    
+    /**
+     * Request Wrapper - 파라미터 복호화
+     */
+    private static class DecryptedRequestWrapper extends HttpServletRequestWrapper {
+        
+        private final CryptoService cryptoService;
+        private final Map<String, String[]> decryptedParams;
+        
+        public DecryptedRequestWrapper(HttpServletRequest request, CryptoService cryptoService) {
+            super(request);
+            this.cryptoService = cryptoService;
+            this.decryptedParams = new HashMap<>();
+            
+            // 원본 파라미터 복사 및 복호화 처리
+            Map<String, String[]> originalParams = request.getParameterMap();
+            for (Map.Entry<String, String[]> entry : originalParams.entrySet()) {
+                String paramName = entry.getKey();
+                String[] paramValues = entry.getValue();
+                
+                if (needsDecryption(paramName)) {
+                    decryptedParams.put(paramName, decryptValues(paramValues));
+                } else {
+                    decryptedParams.put(paramName, paramValues);
+                }
+            }
+        }
+        
+        private String[] decryptValues(String[] values) {
+            if (values == null) {
+                return null;
+            }
+            
+            String[] decrypted = new String[values.length];
+            for (int i = 0; i < values.length; i++) {
+                try {
+                    decrypted[i] = cryptoService.decrypt(values[i]);
+                } catch (Exception e) {
+                    System.err.println("복호화 실패: " + values[i]);
+                    decrypted[i] = values[i];
+                }
+            }
+            return decrypted;
+        }
+        
+        @Override
+        public String getParameter(String name) {
+            String[] values = decryptedParams.get(name);
+            return (values != null && values.length > 0) ? values[0] : null;
+        }
+        
+        @Override
+        public Map<String, String[]> getParameterMap() {
+            return Collections.unmodifiableMap(decryptedParams);
+        }
+        
+        @Override
+        public Enumeration<String> getParameterNames() {
+            return Collections.enumeration(decryptedParams.keySet());
+        }
+        
+        @Override
+        public String[] getParameterValues(String name) {
+            return decryptedParams.get(name);
+        }
+    }
+}
+```
+
+### 4. DecryptRequestBodyAdvice.java
+**경로**: `src/main/java/egovframework/com/cmm/web/DecryptRequestBodyAdvice.java`
+
+```java
+package egovframework.com.cmm.web;
+
+import java.io.IOException;
+import java.lang.reflect.Type;
+
+import javax.annotation.Resource;
+import javax.servlet.http.HttpServletRequest;
+
+import org.springframework.core.MethodParameter;
+import org.springframework.http.HttpInputMessage;
+import org.springframework.http.converter.HttpMessageConverter;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.servlet.mvc.method.annotation.RequestBodyAdvice;
+
+import egovframework.com.cmm.util.CryptoFieldProcessor;
+
+/**
+ * @RequestBody JSON 자동 복호화
+ * *.do, *.dx 패턴만 처리
+ */
+@RestControllerAdvice
+public class DecryptRequestBodyAdvice implements RequestBodyAdvice {
+    
+    @Resource(name = "cryptoFieldProcessor")
+    private CryptoFieldProcessor cryptoFieldProcessor;
+    
+    @Override
+    public boolean supports(MethodParameter methodParameter,
+                           Type targetType,
+                           Class<? extends HttpMessageConverter<?>> converterType) {
+        
+        // URL 패턴 체크
+        try {
+            ServletRequestAttributes attributes = 
+                (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+            
+            if (attributes != null) {
+                HttpServletRequest request = attributes.getRequest();
+                String requestUri = request.getRequestURI();
+                
+                // *.do 또는 *.dx만 처리
+                return requestUri.endsWith(".do") || requestUri.endsWith(".dx");
+            }
+        } catch (Exception e) {
+            // 예외 발생 시 처리
+        }
+        
+        return false;
+    }
+    
+    @Override
+    public HttpInputMessage beforeBodyRead(HttpInputMessage inputMessage,
+                                          MethodParameter parameter,
+                                          Type targetType,
+                                          Class<? extends HttpMessageConverter<?>> converterType) 
+            throws IOException {
+        return inputMessage;
+    }
+    
+    @Override
+    public Object afterBodyRead(Object body,
+                               HttpInputMessage inputMessage,
+                               MethodParameter parameter,
+                               Type targetType,
+                               Class<? extends HttpMessageConverter<?>> converterType) {
+        // RequestBody 객체 복호화
+        return cryptoFieldProcessor.decryptObject(body);
+    }
+    
+    @Override
+    public Object handleEmptyBody(Object body,
+                                 HttpInputMessage inputMessage,
+                                 MethodParameter parameter,
+                                 Type targetType,
+                                 Class<? extends HttpMessageConverter<?>> converterType) {
+        return body;
+    }
+}
+```
+
+### 5. EncryptResponseBodyAdvice.java
+**경로**: `src/main/java/egovframework/com/cmm/web/EncryptResponseBodyAdvice.java`
+
+```java
+package egovframework.com.cmm.web;
+
+import javax.annotation.Resource;
+import javax.servlet.http.HttpServletRequest;
+
+import org.springframework.core.MethodParameter;
+import org.springframework.http.MediaType;
+import org.springframework.http.converter.HttpMessageConverter;
+import org.springframework.http.server.ServerHttpRequest;
+import org.springframework.http.server.ServerHttpResponse;
+import org.springframework.http.server.ServletServerHttpRequest;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyAdvice;
+
+import egovframework.com.cmm.util.CryptoFieldProcessor;
+
+/**
+ * @RestController JSON 응답 자동 암호화
+ * *.do, *.dx 패턴만 처리
+ */
+@RestControllerAdvice
+public class EncryptResponseBodyAdvice implements ResponseBodyAdvice<Object> {
+    
+    @Resource(name = "cryptoFieldProcessor")
+    private CryptoFieldProcessor cryptoFieldProcessor;
+    
+    @Override
+    public boolean supports(MethodParameter returnType,
+                           Class<? extends HttpMessageConverter<?>> converterType) {
+        return true;
+    }
+    
+    @Override
+    public Object beforeBodyWrite(Object body,
+                                 MethodParameter returnType,
+                                 MediaType selectedContentType,
+                                 Class<? extends HttpMessageConverter<?>> selectedConverterType,
+                                 ServerHttpRequest request,
+                                 ServerHttpResponse response) {
+        
+        if (body == null) {
+            return null;
+        }
+        
+        // URL 패턴 체크
+        if (request instanceof ServletServerHttpRequest) {
+            HttpServletRequest servletRequest = 
+                ((ServletServerHttpRequest) request).getServletRequest();
+            String requestUri = servletRequest.getRequestURI();
+            
+            // *.do 또는 *.dx가 아니면 암호화 건너뜀
+            if (!requestUri.endsWith(".do") && !requestUri.endsWith(".dx")) {
+                return body;
+            }
+        }
+        
+        // 응답 데이터 암호화
+        return cryptoFieldProcessor.encryptObject(body);
+    }
+}
+```
+
+### 6. EncryptModelInterceptor.java
+**경로**: `src/main/java/egovframework/com/cmm/interceptor/EncryptModelInterceptor.java`
+
+```java
+package egovframework.com.cmm.interceptor;
+
+import java.util.Map;
+
+import javax.annotation.Resource;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import org.springframework.stereotype.Component;
+import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.servlet.ModelAndView;
+
+import egovframework.com.cmm.util.CryptoFieldProcessor;
+
+/**
+ * @Controller의 Model 데이터 자동 암호화
+ * *.do, *.dx 패턴만 처리
+ */
+@Component("encryptModelInterceptor")
+public class EncryptModelInterceptor implements HandlerInterceptor {
+    
+    @Resource(name = "cryptoFieldProcessor")
+    private CryptoFieldProcessor cryptoFieldProcessor;
+    
+    @Override
+    public void postHandle(HttpServletRequest request,
+                          HttpServletResponse response,
+                          Object handler,
+                          ModelAndView modelAndView) throws Exception {
+        
+        if (modelAndView == null || modelAndView.getModel() == null) {
+            return;
+        }
+        
+        // Model 데이터 암호화
+        Map<String, Object> model = modelAndView.getModel();
+        for (Map.Entry<String, Object> entry : model.entrySet()) {
+            Object value = entry.getValue();
+            if (value != null) {
+                entry.setValue(cryptoFieldProcessor.encryptObject(value));
+            }
+        }
+    }
+}
+```
+
+---
+
+## 설정 파일
+
+### 1. crypto-mapper.xml
+**경로**: `src/main/resources/egovframework/sqlmap/com/cmm/crypto-mapper.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" 
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="crypto">
+    
+    <!-- Oracle 암호화 함수 호출 -->
+    <select id="encrypt" parameterType="hashMap" resultType="string">
+        SELECT YOUR_ENCRYPT_FUNCTION(#{plainText}) AS result FROM DUAL
+    </select>
+    
+    <!-- Oracle 복호화 함수 호출 -->
+    <select id="decrypt" parameterType="hashMap" resultType="string">
+        SELECT YOUR_DECRYPT_FUNCTION(#{encryptedText}) AS result FROM DUAL
+    </select>
+    
+</mapper>
+```
+
+> **주의**: `YOUR_ENCRYPT_FUNCTION`, `YOUR_DECRYPT_FUNCTION`을 실제 DB 함수명으로 변경하세요.
+
+### 2. web.xml
+**경로**: `src/main/webapp/WEB-INF/web.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<web-app xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns="http://xmlns.jcp.org/xml/ns/javaee"
+    xsi:schemaLocation="http://xmlns.jcp.org/xml/ns/javaee 
+        http://xmlns.jcp.org/xml/ns/javaee/web-app_3_1.xsd"
+    version="3.1">
+    
+    <display-name>eGov Application</display-name>
+    
+    <!-- Context 설정 -->
+    <context-param>
+        <param-name>contextConfigLocation</param-name>
+        <param-value>
+            classpath*:egovframework/spring/com/context-*.xml
+        </param-value>
+    </context-param>
+    
+    <!-- Spring Context 로드 -->
+    <listener>
+        <listener-class>org.springframework.web.context.ContextLoaderListener</listener-class>
+    </listener>
+    
+    <!-- 복호화 필터 (DelegatingFilterProxy 사용) -->
+    <filter>
+        <filter-name>decryptionFilter</filter-name>
+        <filter-class>org.springframework.web.filter.DelegatingFilterProxy</filter-class>
+        <init-param>
+            <param-name>targetBeanName</param-name>
+            <param-value>decryptionFilter</param-value>
+        </init-param>
+    </filter>
+    
+    <!-- *.do 패턴에 적용 -->
+    <filter-mapping>
+        <filter-name>decryptionFilter</filter-name>
+        <url-pattern>*.do</url-pattern>
+    </filter-mapping>
+    
+    <!-- *.dx 패턴에 적용 -->
+    <filter-mapping>
+        <filter-name>decryptionFilter</filter-name>
+        <url-pattern>*.dx</url-pattern>
+    </filter-mapping>
+    
+    <!-- 인코딩 필터 -->
+    <filter>
+        <filter-name>encodingFilter</filter-name>
+        <filter-class>org.springframework.web.filter.CharacterEncodingFilter</filter-class>
+        <init-param>
+            <param-name>encoding</param-name>
+            <param-value>UTF-8</param-value>
+        </init-param>
+        <init-param>
+            <param-name>forceEncoding</param-name>
+            <param-value>true</param-value>
+        </init-param>
+    </filter>
+    <filter-mapping>
+        <filter-name>encodingFilter</filter-name>
+        <url-pattern>/*</url-pattern>
+    </filter-mapping>
+    
+    <!-- DispatcherServlet -->
+    <servlet>
+        <servlet-name>dispatcher</servlet-name>
+        <servlet-class>org.springframework.web.servlet.DispatcherServlet</servlet-class>
+        <init-param>
+            <param-name>contextConfigLocation</param-name>
+            <param-value>
+                /WEB-INF/config/egovframework/springmvc/dispatcher-servlet.xml
+            </param-value>
+        </init-param>
+        <load-on-startup>1</load-on-startup>
+    </servlet>
+    
+    <!-- *.do, *.dx 패턴 매핑 -->
+    <servlet-mapping>
+        <servlet-name>dispatcher</servlet-name>
+        <url-pattern>*.do</url-pattern>
+    </servlet-mapping>
+    <servlet-mapping>
+        <servlet-name>dispatcher</servlet-name>
+        <url-pattern>*.dx</url-pattern>
+    </servlet-mapping>
+    
+</web-app>
+```
+
+### 3. dispatcher-servlet.xml
+**경로**: `src/main/webapp/WEB-INF/config/egovframework/springmvc/dispatcher-servlet.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:context="http://www.springframework.org/schema/context"
+    xmlns:mvc="http://www.springframework.org/schema/mvc"
+    xsi:schemaLocation="
+        http://www.springframework.org/schema/beans 
+        http://www.springframework.org/schema/beans/spring-beans-5.3.xsd
+        http://www.springframework.org/schema/context 
+        http://www.springframework.org/schema/context/spring-context-5.3.xsd
+        http://www.springframework.org/schema/mvc 
+        http://www.springframework.org/schema/mvc/spring-mvc-5.3.xsd">
+    
+    <!-- 컴포넌트 스캔 -->
+    <context:component-scan base-package="egovframework.com">
+        <context:include-filter type="annotation" 
+            expression="org.springframework.stereotype.Controller"/>
+        <context:include-filter type="annotation" 
+            expression="org.springframework.web.bind.annotation.RestControllerAdvice"/>
+        <context:exclude-filter type="annotation" 
+            expression="org.springframework.stereotype.Service"/>
+        <context:exclude-filter type="annotation" 
+            expression="org.springframework.stereotype.Repository"/>
+    </context:component-scan>
+    
+    <!-- MVC Annotation 활성화 -->
+    <mvc:annotation-driven/>
+    
+    <!-- Interceptor 등록 -->
+    <mvc:interceptors>
+        <mvc:interceptor>
+            <!-- *.do 패턴에만 적용 -->
+            <mvc:mapping path="/**/*.do"/>
+            <!-- *.dx 패턴에만 적용 -->
+            <mvc:mapping path="/**/*.dx"/>
+            <!-- 제외할 패턴 -->
+            <mvc:exclude-mapping path="/static/**"/>
+            <mvc:exclude-mapping path="/resources/**"/>
+            <mvc:exclude-mapping path="/css/**"/>
+            <mvc:exclude-mapping path="/js/**"/>
+            <mvc:exclude-mapping path="/images/**"/>
+            <bean class="egovframework.com.cmm.interceptor.EncryptModelInterceptor"/>
+        </mvc:interceptor>
+    </mvc:interceptors>
+    
+    <!-- ViewResolver -->
+    <bean class="org.springframework.web.servlet.view.InternalResourceViewResolver">
+        <property name="prefix" value="/WEB-INF/jsp/"/>
+        <property name="suffix" value=".jsp"/>
+        <property name="order" value="1"/>
+    </bean>
+    
+    <!-- Static Resource -->
+    <mvc:resources mapping="/resources/**" location="/resources/"/>
+    <mvc:resources mapping="/static/**" location="/static/"/>
+    <mvc:resources mapping="/css/**" location="/css/"/>
+    <mvc:resources mapping="/js/**" location="/js/"/>
+    <mvc:resources mapping="/images/**" location="/images/"/>
+    
+</beans>
+```
+
+### 4. context-common.xml
+**경로**: `src/main/resources/egovframework/spring/com/context-common.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:context="http://www.springframework.org/schema/context"
+    xsi:schemaLocation="
+        http://www.springframework.org/schema/beans 
+        http://www.springframework.org/schema/beans/spring-beans-5.3.xsd
+        http://www.springframework.org/schema/context 
+        http://www.springframework.org/schema/context/spring-context-5.3.xsd">
+    
+    <!-- 컴포넌트 스캔 (Filter 포함) -->
+    <context:component-scan base-package="egovframework.com">
+        <context:exclude-filter type="annotation" 
+            expression="org.springframework.stereotype.Controller"/>
+    </context:component-scan>
+    
+    <!-- Properties 파일 로드 -->
+    <context:property-placeholder 
+        location="classpath*:egovframework/egovProps/globals.properties"/>
+    
+</beans>
+```
+
+### 5. context-mapper.xml
+**경로**: `src/main/resources/egovframework/spring/com/context-mapper.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+        http://www.springframework.org/schema/beans 
+        http://www.springframework.org/schema/beans/spring-beans-5.3.xsd">
+    
+    <bean id="sqlSession" class="org.mybatis.spring.SqlSessionFactoryBean">
+        <property name="dataSource" ref="dataSource"/>
+        <property name="configLocation" 
+            value="classpath:/egovframework/sqlmap/sql-mapper-config.xml"/>
+        <property name="mapperLocations">
+            <list>
+                <value>classpath:/egovframework/sqlmap/com/**/*_SQL.xml</value>
+                <!-- crypto-mapper.xml 추가 -->
+                <value>classpath:/egovframework/sqlmap/com/cmm/crypto-mapper.xml</value>
+            </list>
+        </property>
+    </bean>
+    
+    <bean id="sqlSessionTemplate" class="org.mybatis.spring.SqlSessionTemplate">
+        <constructor-arg index="0" ref="sqlSession"/>
+    </bean>
+    
+</beans>
+```
+
+### 6. pom.xml 의존성 추가
+
+```xml
+<properties>
+    <spring.maven.artifact.version>5.3.27</spring.maven.artifact.version>
+    <org.egovframe.rte.version>4.2.0</org.egovframe.rte.version>
+</properties>
+
+<dependencies>
+    <!-- Apache Commons Lang3 -->
+    <dependency>
+        <groupId>org.apache.commons</groupId>
+        <artifactId>commons-lang3</artifactId>
+        <version>3.12.0</version>
+    </dependency>
+    
+    <!-- Jackson (JSON 처리) -->
+    <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>2.13.4</version>
+    </dependency>
+    
+    <!-- eGov 기본 -->
+    <dependency>
+        <groupId>org.egovframe.rte</groupId>
+        <artifactId>org.egovframe.rte.ptl.mvc</artifactId>
+        <version>${org.egovframe.rte.version}</version>
+    </dependency>
+    
+    <dependency>
+        <groupId>org.egovframe.rte</groupId>
+        <artifactId>org.egovframe.rte.psl.dataaccess</artifactId>
+        <version>${org.egovframe.rte.version}</version>
+    </dependency>
+</dependencies>
+```
+
+---
+
+## 사용 방법
+
+### 컨트롤러에서 사용 (아무 작업 필요 없음!)
+
+#### @Controller + @RequestParam
+```java
+@Controller
+@RequestMapping("/file")
+public class FileController {
+    
+    @GetMapping("/view.do")
+    public String fileView(
+        @RequestParam String mainAtchFileId,  // ✅ 자동 복호화됨!
+        Model model
+    ) {
+        FileVO file = fileService.getFile(mainAtchFileId);
+        model.addAttribute("file", file);  // ✅ 자동 암호화됨!
+        return "file/view";
+    }
+}
+```
+
+#### @RestController + @RequestParam
+```java
+@RestController
+@RequestMapping("/api/file")
+public class FileApiController {
+    
+    @GetMapping("/info.do")
+    public FileVO getFileInfo(@RequestParam String mainAtchFileId) {
+        // mainAtchFileId는 이미 복호화됨!
+        FileVO file = fileService.getFile(mainAtchFileId);
+        // return 값은 자동 암호화됨!
+        return file;
+    }
+}
+```
+
+#### @RestController + @RequestBody
+```java
+@RestController
+@RequestMapping("/api/file")
+public class FileApiController {
+    
+    @PostMapping("/upload.do")
+    public FileVO uploadFile(@RequestBody FileUploadDto dto) {
+        // dto 안의 모든 ***AtchFileId는 이미 복호화됨!
+        FileVO file = fileService.upload(dto);
+        // return 값은 자동 암호화됨!
+        return file;
+    }
+}
+```
+
+### JSP에서 사용
+
+```jsp
+<%-- fileInfo.mainAtchFileId는 이미 암호화된 상태 --%>
+<form action="/file/update.do" method="post">
+    <input type="hidden" name="mainAtchFileId" value="${fileInfo.mainAtchFileId}"/>
+    <input type="text" name="title" value="${fileInfo.title}"/>
+    <button type="submit">수정</button>
+</form>
+
+<script>
+// AJAX 호출 시에도 자동 처리
+$.ajax({
+    url: '/api/file/info.do',
+    data: { 
+        mainAtchFileId: '${fileInfo.mainAtchFileId}'  // 암호화된 값 전송
+    },
+    success: function(response) {
+        // response.mainAtchFileId도 암호화된 상태
+        console.log(response.mainAtchFileId);
+    }
+});
+</script>
+```
+
+---
+
+## 동작 흐름
+
+### 요청 처리 흐름
+```
+클라이언트 → Filter (복호화) → RequestBodyAdvice (복호화) 
+→ Controller (평문 처리) → Interceptor (암호화) 
+→ ResponseBodyAdvice (암호화) → 클라이언트
+```
+
+### 시나리오별 상세 흐름
+
+#### 1. @Controller + Form 파라미터
+```
+GET /file/view.do?mainAtchFileId=ENCRYPTED_123
+
+① Filter: "ENCRYPTED_123" → "12345" (복호화)
+② Controller: mainAtchFileId = "12345"
+③ Interceptor: model.file.mainAtchFileId = "12345" → "ENCRYPTED_123" (암호화)
+④ JSP: ${file.mainAtchFileId} = "ENCRYPTED_123"
+```
+
+#### 2. @RestController + JSON Body
+```
+POST /api/file/upload.do
+Body: {"mainAtchFileId": "ENCRYPTED_123"}
+
+① Filter: (Body는 처리 안 함)
+② RequestBodyAdvice: dto.mainAtchFileId = "ENCRYPTED_123" → "12345" (복호화)
+③ Controller: dto.mainAtchFileId = "12345"
+④ ResponseBodyAdvice: result.mainAtchFileId = "12345" → "ENCRYPTED_123" (암호화)
+⑤ Response: {"mainAtchFileId": "ENCRYPTED_123"}
+```
+
+---
+
+## 트러블슈팅
+
+### 1. "CryptoService is null" 에러
+
+**원인**: Spring Bean 주입 실패
+
+**해결**:
+1. `context-common.xml`에서 component-scan 범위 확인
+2. `@Service("cryptoService")` 애노테이션 확인
+3. `web.xml`에서 `ContextLoaderListener`가 Filter보다 먼저 등록되었는지 확인
+
+### 2. Filter가 동작하지 않음
+
+**원인**: DelegatingFilterProxy 미사용
+
+**해결**:
+```xml
+<!-- ❌ 잘못된 방식 -->
+<filter-class>egovframework.com.cmm.filter.DecryptionFilter</filter-class>
+
+<!-- ✅ 올바른 방식 -->
+<filter-class>org.springframework.web.filter.DelegatingFilterProxy</filter-class>
+```
+
+### 3. RequestBodyAdvice가 동작하지 않음
+
+**원인**: `@RestControllerAdvice` 스캔 누락
+
+**해결**:
+```xml
+<context:component-scan base-package="egovframework.com">
+    <context:include-filter type="annotation" 
+        expression="org.springframework.web.bind.annotation.RestControllerAdvice"/>
+</context:component-scan>
+```
+
+### 4. Mapper를 찾을 수 없음
+
+**원인**: crypto-mapper.xml 경로 미등록
+
+**해결**:
+```xml
+<property name="mapperLocations">
+    <list>
+        <!-- 기존 Mapper -->
+        <value>classpath:/egovframework/sqlmap/com/**/*_SQL.xml</value>
+        <!-- crypto-mapper.xml 추가 -->
+        <value>classpath:/egovframework/sqlmap/com/cmm/crypto-mapper.xml</value>
+    </list>
+</property>
+```
+
+### 5. 일부 URL만 암복호화 적용
+
+**현상**: 특정 URL에서만 암복호화가 동작함
+
+**원인**: `*.do`, `*.dx` 패턴만 적용되도록 설정됨
+
+**해결**:
+- 의도된 동작입니다.
+- 다른 패턴에도 적용하려면 `web.xml`과 `dispatcher-servlet.xml`에서 패턴 추가
+
+### 6. JSON 파싱 에러
+
+**원인**: Jackson 라이브러리 누락
+
+**해결**:
+```xml
+<dependency>
+    <groupId>com.fasterxml.jackson.core</groupId>
+    <artifactId>jackson-databind</artifactId>
+    <version>2.13.4</version>
+</dependency>
+```
+
+---
+
+## 체크리스트
+
+### 배포 전 확인사항
+- [ ] 모든 Java 파일이 올바른 패키지에 위치
+- [ ] `crypto-mapper.xml`의 DB 함수명 수정
+- [ ] `context-mapper.xml`에 crypto-mapper.xml 등록
+- [ ] `web.xml`에 DelegatingFilterProxy 등록
+- [ ] `dispatcher-servlet.xml`에 Interceptor 등록
+- [ ] Component Scan 범위 확인
+- [ ] pom.xml 의존성 추가
+- [ ] Maven clean & compile
+
+### 동작 확인사항
+- [ ] 서버 시작 시 "DecryptionFilter 초기화!" 로그 확인
+- [ ] `*.do` 요청 시 암복호화 동작 확인
+- [ ] `*.dx` 요청 시 암복호화 동작 확인
+- [ ] 일반 URL은 암복호화 미적용 확인
+- [ ] @Controller와 @RestController 모두 테스트
+
+---
+
+## 참고사항
+
+### 패턴 추가 방법
+
+**현재**: `***AtchFileId`, `atchFilePath`만 처리
+
+**추가하려면**: `CryptoFieldProcessor.java` 수정
+```java
+private static final Pattern ATCH_FILE_ID_PATTERN = Pattern.compile(".*AtchFileId$");
+private static final String ATCH_FILE_PATH = "atchFilePath";
+private static final String NEW_FIELD = "newField";  // 추가
+
+public boolean needsCrypto(String fieldName) {
+    return ATCH_FILE_ID_PATTERN.matcher(fieldName).matches() 
+        || ATCH_FILE_PATH.equalsIgnoreCase(fieldName)
+        || NEW_FIELD.equalsIgnoreCase(fieldName);  // 추가
+}
+```
+
+### 성능 고려사항
+
+1. **DB 호출 최소화**: 캐싱 고려
+2. **대용량 데이터**: 필요한 필드만 암복호화
+3. **로깅**: 프로덕션에서는 디버그 로그 제거
+
+### 보안 고려사항
+
+1. **DB 함수 권한**: 암복호화 함수 실행 권한 필요
+2. **에러 처리**: 복호화 실패 시 에러 로깅
+3. **감사 로그**: 필요시 암복호화 이력 기록
+
+---
+
+## 문의
+
+구현 중 문제가 발생하면 다음을 확인하세요:
+1. 서버 로그 (Tomcat logs)
+2. 브라우저 개발자 도구 (Network 탭)
+3. DB 함수 테스트
+
+---
+
+**작성일**: 2024
+**버전**: 1.0
+**대상**: eGov Framework 4.2
