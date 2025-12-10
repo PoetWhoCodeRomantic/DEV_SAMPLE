@@ -306,16 +306,24 @@ public class CryptoFieldProcessor {
     private Object decryptVoFields(Object vo) {
         try {
             Field[] fields = vo.getClass().getDeclaredFields();
-            
+
             for (Field field : fields) {
                 field.setAccessible(true);
+
+                // static 또는 final 필드는 건너뛰기
+                int modifiers = field.getModifiers();
+                if (java.lang.reflect.Modifier.isStatic(modifiers)
+                        || java.lang.reflect.Modifier.isFinal(modifiers)) {
+                    continue;
+                }
+
                 String fieldName = field.getName();
                 Object value = field.get(vo);
-                
+
                 if (value == null) {
                     continue;
                 }
-                
+
                 // 암호화 대상 필드
                 if (needsCrypto(fieldName) && value instanceof String) {
                     field.set(vo, cryptoService.decrypt((String) value));
@@ -323,7 +331,7 @@ public class CryptoFieldProcessor {
                 // 중첩 객체 처리
                 else if (value instanceof List || value instanceof Map) {
                     field.set(vo, decryptObject(value));
-                } else if (!field.getType().isPrimitive() 
+                } else if (!field.getType().isPrimitive()
                         && !field.getType().getName().startsWith("java.lang")) {
                     field.set(vo, decryptVoFields(value));
                 }
@@ -340,16 +348,24 @@ public class CryptoFieldProcessor {
     private Object encryptVoFields(Object vo) {
         try {
             Field[] fields = vo.getClass().getDeclaredFields();
-            
+
             for (Field field : fields) {
                 field.setAccessible(true);
+
+                // static 또는 final 필드는 건너뛰기
+                int modifiers = field.getModifiers();
+                if (java.lang.reflect.Modifier.isStatic(modifiers)
+                        || java.lang.reflect.Modifier.isFinal(modifiers)) {
+                    continue;
+                }
+
                 String fieldName = field.getName();
                 Object value = field.get(vo);
-                
+
                 if (value == null) {
                     continue;
                 }
-                
+
                 // 암호화 대상 필드
                 if (needsCrypto(fieldName) && value instanceof String) {
                     field.set(vo, cryptoService.encrypt((String) value));
@@ -357,7 +373,7 @@ public class CryptoFieldProcessor {
                 // 중첩 객체 처리
                 else if (value instanceof List || value instanceof Map) {
                     field.set(vo, encryptObject(value));
-                } else if (!field.getType().isPrimitive() 
+                } else if (!field.getType().isPrimitive()
                         && !field.getType().getName().startsWith("java.lang")) {
                     field.set(vo, encryptVoFields(value));
                 }
